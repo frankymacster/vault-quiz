@@ -198,10 +198,21 @@ def mark_known(note):
 MNEMONIC_HEADING = "### 💡 Mnemonic"
 
 
-def get_mnemonic(text):
-    m = re.search(re.escape(MNEMONIC_HEADING) + r"\n(.*?)(?=\n### |\n---\s*$)",
-                  text, re.S)
+SUGGESTED_HEADING = "### 🤖 Suggested mnemonic"   # a draft to rewrite in
+                                                  # your own words, kept in
+                                                  # its own section (placed
+                                                  # before Components) so
+                                                  # set_mnemonic never
+                                                  # touches it
+
+
+def get_section(text, heading):
+    m = re.search(re.escape(heading) + r"\n(.*?)(?=\n### |\n---\s*$)", text, re.S)
     return m.group(1).strip() if m else None
+
+
+def get_mnemonic(text):
+    return get_section(text, MNEMONIC_HEADING)
 
 
 def set_mnemonic(note, text):
@@ -244,6 +255,7 @@ def build():
         d["vocab"] = [l[6:] for l in d["links"] if l.startswith("Vocab-")]
         d["comps"] = [l[5:] for l in d["links"] if l.startswith("Comp-")]
         d["mnemonic"] = get_mnemonic(d["text"])
+        d["suggested"] = get_section(d["text"], SUGGESTED_HEADING)
 
     known_v = {w for w, d in vocab.items() if d["known"]}
     known_k = {k for k, d in kanji.items() if d["known"]}
@@ -566,14 +578,30 @@ def save_mnemonic_if_real(d, text, verb):
     print(f"  {C['g']}{verb}{C['0']}")
 
 
+def show_suggested(d):
+    print(f"  {C['y']}suggested mnemonic:{C['0']} {d['suggested']}")
+
+
+def write_prompt(d, lead):
+    """Rewriting the draft in your own words is the point -- reading a
+    mnemonic someone else made sticks less than one you put together."""
+    if d["suggested"]:
+        show_suggested(d)
+        return _read(f"{C['dim']}  {lead} -- rewrite it in your own words "
+                     f"(blank to skip){C['0']}  ")
+    return _read(f"{C['dim']}  {lead} (blank to skip){C['0']}  ")
+
+
 def do_mnemonic(k, d):
     if d["mnemonic"]:
         print(f"  {C['y']}your mnemonic:{C['0']} {d['mnemonic']}")
+        if d["suggested"]:
+            show_suggested(d)
         edit = _read(f"{C['dim']}  enter to keep it, or type a replacement{C['0']}  ")
         if edit:
             save_mnemonic_if_real(d, edit, "updated")
     else:
-        note = _read(f"{C['dim']}  write a mnemonic (blank to skip){C['0']}  ")
+        note = write_prompt(d, "write a mnemonic")
         if note:
             save_mnemonic_if_real(d, note, "saved")
 
@@ -642,8 +670,7 @@ def ask(k, d, ctx, n, total):
                     print(f"  {C['y']}your mnemonic:{C['0']} {d['mnemonic']}")
                     _read(f"{C['dim']}  enter for next{C['0']}  ")
                 else:
-                    note = _read(f"{C['dim']}  write a mnemonic for next "
-                                f"time (blank to skip){C['0']}  ")
+                    note = write_prompt(d, "write a mnemonic for next time")
                     if note:
                         save_mnemonic_if_real(d, note, "saved")
                 log_attempt(k, events, "gave_up", grade)
@@ -674,6 +701,9 @@ def ask(k, d, ctx, n, total):
                 if misses == 1 and d["mnemonic"]:
                     events.append(["auto_hint", "m"])
                     print(f"  {C['y']}your mnemonic:{C['0']} {d['mnemonic']}")
+                elif misses == 1 and d["suggested"]:
+                    events.append(["auto_hint", "suggested"])
+                    show_suggested(d)
                 elif misses == 2:
                     events.append(["auto_hint", "v" if d["vocab"] else "c"])
                     print(f"  {C['y']}two misses -- here's a hint:{C['0']}")
