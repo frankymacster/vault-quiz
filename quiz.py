@@ -26,7 +26,8 @@ catches those.
     python3 quiz.py --vault <vault> --new 30     # cap new cards this session
     python3 quiz.py --vault <vault> --max 50     # cap the whole session (default 30)
     python3 quiz.py --vault <vault> --plan       # show the queue, ask nothing
-    python3 quiz.py --vault <vault> --confusable [N]   # drill N lookalike clusters
+    python3 quiz.py --vault <vault> --confusable [N]   # drill N shared-component clusters
+    python3 quiz.py --vault <vault> --lookalikes [N]   # drill N lookalike groups
 
 Each vault has a launcher (quiz_kanji.py / quiz_hanzi.py) that fills in --vault.
 """
@@ -206,6 +207,12 @@ SUGGESTED_HEADING = "### 🤖 Suggested mnemonic"   # a draft to rewrite in
                                                   # touches it
 
 
+LOOKALIKES_HEADING = "### 👀 Lookalikes"   # links to the characters this one
+                                           # gets mistaken for -- shape-based,
+                                           # so it catches pairs that share no
+                                           # component (未/末) as well
+
+
 def get_section(text, heading):
     m = re.search(re.escape(heading) + r"\n(.*?)(?=\n### |\n---\s*$)", text, re.S)
     return m.group(1).strip() if m else None
@@ -256,6 +263,11 @@ def build():
         d["comps"] = [l[5:] for l in d["links"] if l.startswith("Comp-")]
         d["mnemonic"] = get_mnemonic(d["text"])
         d["suggested"] = get_section(d["text"], SUGGESTED_HEADING)
+        look = get_section(d["text"], LOOKALIKES_HEADING) or ""
+        d["lookalikes"] = [nfc(x) for x in re.findall(r"\[\[" + re.escape(P["prefix"])
+                                                      + r"([^\]]+)\]\]", look)]
+    for k, d in kanji.items():
+        d["lookalikes"] = [x for x in d["lookalikes"] if x in kanji]
 
     known_v = {w for w, d in vocab.items() if d["known"]}
     known_k = {k for k, d in kanji.items() if d["known"]}
@@ -532,10 +544,19 @@ def show_components(d, comp_meanings):
         print(f"    {c}  ({comp_meanings.get(c, '?').split(',')[0].strip()})")
 
 
+def short(text):
+    return meaning(text).split(",")[0].strip()
+
+
 def show_similar(k, d, kanji, comp_idx):
+    if d["lookalikes"]:
+        print(f"  {C['y']}looks like:{C['0']}")
+        for k2 in d["lookalikes"]:
+            print(f"    {k2}  ({short(kanji[k2]['text'])})")
     groups = similar_by_component(k, d, kanji, comp_idx)
     if not groups:
-        print(f"  {C['dim']}no shared-component relatives in this vault{C['0']}")
+        if not d["lookalikes"]:
+            print(f"  {C['dim']}no shared-component relatives in this vault{C['0']}")
         return
     print(f"  {C['y']}shares a component with:{C['0']}")
     for c, total, members in groups:
@@ -723,27 +744,22 @@ def ask(k, d, ctx, n, total):
     return grade
 
 
-def confusable_session(ctx, state, n_clusters):
-    """Drill lookalike kanji as a group, back-to-back, instead of scattered
-    across a normal session -- discrimination is the point, so the contrast
-    has to be felt in the moment, not encountered accidentally weeks apart."""
-    kanji, comp_idx = ctx["kanji"], ctx["comp_idx"]
-    clusters = rank_clusters(build_clusters(kanji, comp_idx), kanji)[:n_clusters]
-    if not clusters:
-        print("no confusable clusters need drilling right now")
-        return
-
+def drill_groups(ctx, state, groups, label):
+    """Each group is quizzed back-to-back in shuffled order, then shown side
+    by side with its parts -- discrimination is the point, so the contrast
+    has to be felt in the moment, and the difference is the last thing you
+    see, not encountered accidentally weeks apart."""
+    kanji, comp_meanings = ctx["kanji"], ctx["comp_meanings"]
     graded = tagged = 0
-    for anchor, members, unknown in clusters:
-        print(f"\n{C['b']}{C['c']}confusable group -- shares {anchor}{C['0']}"
-             f"  {C['dim']}({unknown} unknown of {len(members)}){C['0']}")
+    for title, members in groups:
+        print(f"\n{C['b']}{C['c']}{title}{C['0']}")
         order = members[:]
         random.shuffle(order)
         for i, k in enumerate(order, 1):
             result = ask(k, kanji[k], ctx, i, len(order))
             if result is None:
                 save_state(state)
-                print(f"\n{graded} graded across clusters so far")
+                print(f"\n{graded} graded so far")
                 return
             card = schedule(state.get(k, {}), result)
             state[k] = card
@@ -757,14 +773,58 @@ def confusable_session(ctx, state, n_clusters):
 
         print(f"\n  {C['y']}side by side:{C['0']}")
         for k in members:
+            parts = "  ".join(f"{c}({comp_meanings.get(c, '?').split(',')[0].strip()})"
+                              for c in kanji[k]["comps"])
             tag = (f"{C['g']}known{C['0']}" if kanji[k]["known"]
                   else f"{C['dim']}unknown{C['0']}")
-            print(f"    {k}  {meaning(kanji[k]['text']):30}  {tag}")
+            print(f"    {k}  {short(kanji[k]['text']):18}  {parts:34}  {tag}")
 
     save_state(state)
     print(f"\n{C['dim']}{'─' * 52}{C['0']}")
-    print(f"{graded} graded across {len(clusters)} clusters · "
-          f"{tagged} newly tagged known")
+    print(f"{graded} graded across {len(groups)} {label} · {tagged} newly tagged known")
+
+
+def confusable_session(ctx, state, n_clusters):
+    kanji, comp_idx = ctx["kanji"], ctx["comp_idx"]
+    clusters = rank_clusters(build_clusters(kanji, comp_idx), kanji)[:n_clusters]
+    if not clusters:
+        print("no confusable clusters need drilling right now")
+        return
+    drill_groups(ctx, state, [
+        (f"confusable group -- shares {anchor}  ({unknown} unknown of {len(members)})",
+         members) for anchor, members, unknown in clusters], "clusters")
+
+
+def lookalike_groups(kanji, state, n):
+    """A character plus the ones listed under its Lookalikes, worst first:
+    still-unknown before known, then lowest ease, then never-studied. A
+    character joins at most one group per session so the same pair isn't
+    drilled twice in a row under two anchors."""
+    def struggle(k):
+        c = state.get(k)
+        return (kanji[k]["known"], c["ease"] if c else 3.0)
+
+    groups, used = [], set()
+    for k in sorted((k for k, d in kanji.items() if d["lookalikes"]), key=struggle):
+        if k in used:
+            continue
+        members = [k] + [x for x in kanji[k]["lookalikes"] if x not in used]
+        if len(members) < 2:
+            continue
+        used.update(members)
+        groups.append((f"looks alike: {'  '.join(members)}", members))
+        if len(groups) == n:
+            break
+    return groups
+
+
+def lookalike_session(ctx, state, n_groups):
+    groups = lookalike_groups(ctx["kanji"], state, n_groups)
+    if not groups:
+        print(f"no lookalike groups in this vault yet (add a {LOOKALIKES_HEADING} "
+              f"section of links to a note)")
+        return
+    drill_groups(ctx, state, groups, "lookalike groups")
 
 
 def main():
@@ -777,6 +837,9 @@ def main():
     ap.add_argument("--confusable", type=int, nargs="?", const=5, default=None,
                     metavar="N", help="drill N confusable character clusters "
                     "back-to-back instead of the normal session (default 5)")
+    ap.add_argument("--lookalikes", type=int, nargs="?", const=5, default=None,
+                    metavar="N", help="drill N groups of characters you mistake for "
+                    "each other, from their Lookalikes sections (default 5)")
     args = ap.parse_args()
     use_vault(args.vault)
 
@@ -793,6 +856,9 @@ def main():
 
     if args.confusable is not None:
         confusable_session(ctx, state, args.confusable)
+        return
+    if args.lookalikes is not None:
+        lookalike_session(ctx, state, args.lookalikes)
         return
 
     due_all = [k for k, c in state.items()
