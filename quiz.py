@@ -118,6 +118,39 @@ def meaning(text):
     return m.group(1).strip() if m else "?"
 
 
+ACCEPTED = "**Also accepted:**"
+
+
+def accepted(text):
+    m = re.search(r"^" + re.escape(ACCEPTED) + r"\s*(.+)$", text, re.M)
+    return [a.strip() for a in m.group(1).split(",")] if m else []
+
+
+def answer_text(text):
+    """What a guess is graded against: the dictionary gloss plus any wording
+    you've overridden the grader with ('r'). Kept separate from meaning() so
+    the gloss itself is still what gets displayed."""
+    return ", ".join([meaning(text)] + accepted(text))
+
+
+def add_accepted(note, guess):
+    """Stored as a **Also accepted:** line in the note's header field block,
+    so it's visible and hand-editable in Obsidian like the mnemonic."""
+    body = note["text"]
+    have = accepted(body)
+    if guess.lower() in (a.lower() for a in have):
+        return
+    line = f"{ACCEPTED} {', '.join(have + [guess])}\n"
+    old = re.search(r"^" + re.escape(ACCEPTED) + r".*\n", body, re.M)
+    if old:
+        body = body[:old.start()] + line + body[old.end():]
+    else:
+        end = re.search(r"^# .*\n(?:\*\*[^\n]*\n)*", body, re.M).end()
+        body = body[:end] + line + body[end:]
+    open(note["path"], "w", encoding="utf-8").write(body)
+    note["text"] = body
+
+
 def level(text):
     m = re.search(P["level_re"], text)
     return m.group(1) if m else "?"
@@ -412,7 +445,7 @@ MEANING_WORD_CAP = 5   # a word shared by more kanji than this ("counter",
 def build_meaning_index(kanji):
     idx = collections.defaultdict(set)
     for k, d in kanji.items():
-        for w in significant_words(meaning(d["text"])):
+        for w in significant_words(answer_text(d["text"])):
             idx[w].add(k)
     return idx
 
@@ -435,6 +468,20 @@ def find_mixup(guess, k, kanji, meaning_idx, n=3):
 
 class _Quit(Exception):
     pass
+
+
+def log_attempt(k, events, outcome, grade=None):
+    """One JSON line per question in .quiz_log.jsonl: every guess and lookup
+    in order, and how it ended. The SRS state only keeps ease/interval, which
+    says THAT a kanji keeps failing but not WHY -- blank, wrong concept,
+    mixed up with another character, or right idea in words the grader
+    rejected. This is what makes that diagnosable."""
+    if not events and outcome == "quit":
+        return
+    entry = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
+             "char": k, "events": events, "outcome": outcome, "grade": grade}
+    with open(os.path.join(VAULT, ".quiz_log.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 def _read(msg):
@@ -500,11 +547,11 @@ FIRST_MENU = menu("type the meaning", [
 ])
 RETRY_MENU = menu("try again", [
     ("c", "components"), ("v", "vocab"), ("s", "similar"),
-    ("m", "mnemonic"), ("g", "give up"),
+    ("m", "mnemonic"), ("r", "I was right"), ("g", "give up"),
 ])
 
 
-STRAY_KEYS = {"c", "v", "s", "g", "q", "k", "h"}   # every letter that means
+STRAY_KEYS = {"c", "v", "s", "m", "r", "g", "q", "k", "h"}   # every letter that means
                                                    # something elsewhere in
                                                    # the menus -- typed here
                                                    # out of habit, not content
@@ -545,32 +592,48 @@ def ask(k, d, ctx, n, total):
     to write one right then -- the struggle is freshest exactly when you've
     just seen the answer. Only a fully cold, no-aid, first-try correct
     answer counts as "easy"; anything that took a lookup or a wrong attempt
-    is "good"; only an explicit give-up is "again"."""
+    is "good"; only an explicit give-up is "again". 'r' overrides the grader
+    for the last rejected guess (right idea, wording not in the gloss): it
+    counts as correct at the grade that guess would have earned, and the
+    wording is saved as an accepted answer for next time."""
     vocab, kanji, comp_idx = ctx["vocab"], ctx["kanji"], ctx["comp_idx"]
     comp_meanings, meaning_idx = ctx["comp_meanings"], ctx["meaning_idx"]
     print(f"\n{C['dim']}{'─' * 52}{C['0']}")
     print(f"{C['dim']}{n}/{total}   {level_label(d['text'])}{C['0']}")
     print(f"\n      {C['b']}{C['c']}{k}{C['0']}\n")
+    events = []
     try:
         guess = _read(FIRST_MENU)
         cold = True
         answer = meaning(d["text"])
         misses = 0
+        last_wrong, last_wrong_cold = None, False
         while True:
             low = guess.lower()
-            if low == "c":
+            if low in ("c", "v", "s", "m"):
                 cold = False
-                show_components(d, comp_meanings)
-            elif low == "v":
-                cold = False
-                show_vocab_hint(d, vocab)
-            elif low == "s":
-                cold = False
-                show_similar(k, d, kanji, comp_idx)
-            elif low == "m":
-                cold = False
-                do_mnemonic(k, d)
+                events.append(["hint", low])
+                if low == "c":
+                    show_components(d, comp_meanings)
+                elif low == "v":
+                    show_vocab_hint(d, vocab)
+                elif low == "s":
+                    show_similar(k, d, kanji, comp_idx)
+                else:
+                    do_mnemonic(k, d)
+            elif low == "r":
+                if last_wrong is None:
+                    print(f"  {C['dim']}nothing to override -- type a guess first{C['0']}")
+                else:
+                    add_accepted(d, last_wrong)
+                    print(f"  {C['g']}✓ counted -- \"{last_wrong}\" now accepted "
+                         f"for {k}{C['0']}  {C['dim']}({answer}){C['0']}")
+                    grade = 4 if last_wrong_cold else 3
+                    events.append(["override", last_wrong])
+                    log_attempt(k, events, "override", grade)
+                    break
             elif not guess or low == "g":
+                events.append(["give_up"])
                 print(f"  {C['r']}✗ {k} means:{C['0']} {answer}")
                 grade = 1
                 if d["unlocks"]:
@@ -583,17 +646,23 @@ def ask(k, d, ctx, n, total):
                                 f"time (blank to skip){C['0']}  ")
                     if note:
                         save_mnemonic_if_real(d, note, "saved")
+                log_attempt(k, events, "gave_up", grade)
                 return grade
-            elif is_match(guess, answer):
+            elif is_match(guess, answer_text(d["text"])):
+                events.append(["guess", guess])
                 print(f"  {C['g']}✓ {answer}{C['0']}")
                 grade = 4 if cold else 3
+                log_attempt(k, events, "correct", grade)
                 break
             else:
+                last_wrong, last_wrong_cold = guess, cold
                 cold = False
                 misses += 1
+                events.append(["guess", guess])
                 print(f'  {C["r"]}✗ not quite ("{guess}"){C["0"]}')
                 mixups = find_mixup(guess, k, kanji, meaning_idx)
                 if mixups:
+                    events.append(["mixup", mixups])
                     print(f"  {C['y']}that's the meaning of:{C['0']}")
                     for k2 in mixups:
                         print(f"    {k2}  ({meaning(kanji[k2]['text'])})")
@@ -603,16 +672,20 @@ def ask(k, d, ctx, n, total):
                 # mnemonic (if any) is the cheapest, most tailored one, so it
                 # surfaces before the generic vocab/component/similar aids
                 if misses == 1 and d["mnemonic"]:
+                    events.append(["auto_hint", "m"])
                     print(f"  {C['y']}your mnemonic:{C['0']} {d['mnemonic']}")
                 elif misses == 2:
+                    events.append(["auto_hint", "v" if d["vocab"] else "c"])
                     print(f"  {C['y']}two misses -- here's a hint:{C['0']}")
                     (show_vocab_hint(d, vocab) if d["vocab"]
                     else show_components(d, comp_meanings))
                 elif misses >= 3:
+                    events.append(["auto_hint", "s"])
                     print(f"  {C['y']}still stuck -- visual family:{C['0']}")
                     show_similar(k, d, kanji, comp_idx)
             guess = _read(RETRY_MENU)
     except _Quit:
+        log_attempt(k, events, "quit")
         return None
 
     if d["unlocks"]:
