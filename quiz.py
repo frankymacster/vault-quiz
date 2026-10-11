@@ -72,6 +72,9 @@ SESSION_NEW = 20
 SESSION_MAX = 30     # hard cap on total questions -- a backlog day (many
                      # cards maturing to "due" on the same date) shouldn't
                      # turn into a 90-question session
+SESSION_RESERVE = 5  # new cards guaranteed a slot even when reviews alone
+                     # would fill the cap -- without it a standing backlog
+                     # crowds new learning out entirely, every session
 
 C = {"dim": "\033[2m", "b": "\033[1m", "g": "\033[32m", "y": "\033[33m",
      "r": "\033[31m", "c": "\033[36m", "0": "\033[0m"}
@@ -833,6 +836,9 @@ def main():
     ap.add_argument("--new", type=int, default=SESSION_NEW)
     ap.add_argument("--max", type=int, default=SESSION_MAX,
                     help=f"cap total questions this session (default {SESSION_MAX})")
+    ap.add_argument("--reserve", type=int, default=SESSION_RESERVE,
+                    help=f"slots kept for new cards even with a review backlog "
+                    f"(default {SESSION_RESERVE}; --new 0 disables new cards entirely)")
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--confusable", type=int, nargs="?", const=5, default=None,
                     metavar="N", help="drill N confusable character clusters "
@@ -864,13 +870,14 @@ def main():
     due_all = [k for k, c in state.items()
               if c.get("due", 0) <= now and k in kanji and not kanji[k]["known"]]
     due_all.sort(key=lambda k: state[k].get("due", 0))  # most overdue first
-    due = due_all[:args.max]
+    reserve = max(0, min(args.reserve, args.new, args.max // 2))
+    due = due_all[:args.max - reserve]
     deferred = len(due_all) - len(due)
-    fresh = [k for k in frontier(kanji) if k not in state][:max(0, args.max - len(due))][:args.new]
+    fresh = [k for k in frontier(kanji) if k not in state][:max(reserve, args.max - len(due))][:args.new]
 
     if args.plan:
         print(f"{len(due)} due · {len(fresh)} new queued"
-             + (f" · {deferred} due deferred (raise --max to see them)" if deferred else ""))
+             + (f" · {deferred} due deferred to a later session" if deferred else ""))
         for k in fresh[:25]:
             d = kanji[k]
             why = (f"in {d['half']} known words" if d["half"]
@@ -883,7 +890,11 @@ def main():
         print("nothing due. run with --new to pull more.")
         return
     random.shuffle(due)
-    queue = due + fresh
+    # new cards spread through the session rather than tacked on the end,
+    # so quitting early doesn't silently drop the reserved ones
+    queue = due[:]
+    for j, k in enumerate(fresh):
+        queue.insert(round((j + 1) * len(due) / (len(fresh) + 1)) + j, k)
 
     graded = tagged = 0
     requeued = set()
