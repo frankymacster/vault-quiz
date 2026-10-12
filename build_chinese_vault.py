@@ -151,7 +151,20 @@ class NameRegistry:
 
 # ---------------------------------------------------------------- main
 
+def refuse_if_curated():
+    """The build regenerates the vault from scratch (rmtree, then write).
+    Once a vault is its own git repo or holds quiz state, it carries work
+    no build can recreate -- known tags, mnemonics, lookalikes, review
+    history -- so stop before touching anything."""
+    marks = [m for m in (".git", ".quiz_state.json") if os.path.exists(os.path.join(VAULT, m))]
+    if marks:
+        sys.exit(f"refusing to rebuild {VAULT}: it has {', '.join(marks)}, so it holds "
+                 f"hand-made data this build would delete. Move it aside first if you "
+                 f"really want a fresh vault.")
+
+
 def main():
+    refuse_if_curated()
     print("[1/6] fetching data sources")
     hsk = json.load(open(fetch(HSK_URL, "hsk-complete.json", " (9.8 MB)"), encoding="utf-8"))
 
