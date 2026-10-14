@@ -1059,6 +1059,30 @@ def lookalike_session(ctx, state, n_groups, levels=None):
     drill_groups(ctx, state, groups, "lookalike groups")
 
 
+def show_progress(kanji, state, levels=None):
+    """Known / in progress (close = next review 14+ days out, hard = missed
+    HARD_LAPSES+ times) / not started, per level -- printed after every
+    session. Levels outside a --level filter are dimmed."""
+    rows = collections.defaultdict(lambda: [0, 0, 0, 0, 0])
+    for k, d in kanji.items():
+        r = rows[level(d["text"])]
+        r[0] += 1
+        if d["known"]:
+            r[1] += 1
+        elif k in state:
+            r[2] += 1
+            r[3] += state[k].get("ivl", 0) >= 14
+            r[4] += is_hard(state[k])
+    print(f"\n  {C['b']}{'level':9}{'known':>14}{'learning':>10}{'close':>7}{'hard':>6}{'new':>6}{C['0']}")
+    for lvl in P["levels"]:
+        t, kn, st, close, hard = rows[lvl]
+        if not t:
+            continue
+        dim = C["dim"] if levels and lvl not in levels else ""
+        print(f"  {dim}{P['level_fmt'].format(lvl):9}{kn:>5}/{t:<4}{100 * kn // t:>3}%"
+              f"{st:>10}{close:>7}{hard:>6}{t - kn - st:>6}{C['0']}")
+
+
 def parse_levels(spec):
     """'n5-n4', 'n3', 'n3,n2' (Japanese) or '1-3', '2' (Chinese), in the
     vault's own level names; a range runs in either direction."""
@@ -1113,17 +1137,23 @@ def main():
     }
     state = load_state()
     ctx["state"] = state
-    now = today()
 
     if args.confusable is not None:
         confusable_session(ctx, state, args.confusable, levels)
-        return
-    if args.lookalikes is not None:
+    elif args.lookalikes is not None:
         lookalike_session(ctx, state, args.lookalikes, levels)
-        return
-    if args.hard is not None:
+    elif args.hard is not None:
         hard_session(ctx, state, args.hard, levels)
+    elif not review_session(ctx, state, args, levels):
         return
+    show_progress(kanji, state, levels)
+
+
+def review_session(ctx, state, args, levels):
+    """The default session. Returns False when nothing was run (--plan, or
+    nothing due) so no progress table follows."""
+    kanji = ctx["kanji"]
+    now = today()
 
     due_all = [k for k, c in state.items()
               if c.get("due", 0) <= now and k in kanji and not kanji[k]["known"]
@@ -1144,11 +1174,11 @@ def main():
                    else f"unlocks {d['unlocks']}" if d["unlocks"]
                    else level_label(d["text"]))
             print(f"  {k}  {C['dim']}{why:22}{C['0']} {meaning(d['text'])[:46]}")
-        return
+        return False
 
     if not due and not fresh:
         print("nothing due. run with --new to pull more.")
-        return
+        return False
     random.shuffle(due)
     # new cards spread through the session rather than tacked on the end,
     # so quitting early doesn't silently drop the reserved ones
@@ -1166,6 +1196,7 @@ def main():
           f"{remaining} {(args.level + ' ') if levels else ''}{P['noun']} left unknown"
           + (f" · {deferred} due held back, raise --max to clear the backlog"
              if deferred else ""))
+    return True
 
 
 def run_queue(ctx, state, queue):
