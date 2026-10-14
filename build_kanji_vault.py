@@ -297,6 +297,12 @@ def main():
         e = kanji_db.get(ch, {})
         return ", ".join(m.lower() for m in e.get("meanings", [])[:3]) or "—"
 
+    def kanji_also_means(ch):
+        # senses past the first three: not shown as the gloss, but the quiz
+        # grades against them (直 'fix', 無 'not')
+        rest = kanji_db.get(ch, {}).get("meanings", [])[3:]
+        return ", ".join(m.lower() for m in rest if m.strip("- "))
+
     def kanji_sort(ch):
         return (-(kanji_level.get(ch) or 0), kanji_db.get(ch, {}).get("freq") or 99999, ch)
 
@@ -330,6 +336,7 @@ def main():
             "---",
             "# Kanji: %s" % k,
             "**Meaning:** %s" % kanji_meaning(k),
+        ] + (["**Also means:** %s" % kanji_also_means(k)] if kanji_also_means(k) else []) + [
             "",
             "### 🧱 Components",
         ]

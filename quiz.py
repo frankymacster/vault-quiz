@@ -130,11 +130,20 @@ def accepted(text):
     return [a.strip() for a in m.group(1).split(",")] if m else []
 
 
+ALSO_MEANS = "**Also means:**"   # dictionary senses past the first three
+
+
+def also_means(text):
+    m = re.search(r"^" + re.escape(ALSO_MEANS) + r"\s*(.+)$", text, re.M)
+    return m.group(1).strip() if m else ""
+
+
 def answer_text(text):
-    """What a guess is graded against: the dictionary gloss plus any wording
+    """What a guess is graded against: the gloss, the dictionary senses the
+    gloss leaves out (直 'fix', 無 'not' are senses 4 and 6), and any wording
     you've overridden the grader with ('r'). Kept separate from meaning() so
-    the gloss itself is still what gets displayed."""
-    return ", ".join([meaning(text)] + accepted(text))
+    the short gloss is still what gets displayed."""
+    return ", ".join(x for x in [meaning(text), also_means(text)] + accepted(text) if x)
 
 
 def add_accepted(note, guess):
@@ -251,6 +260,25 @@ def set_mnemonic(note, text):
     open(note["path"], "w", encoding="utf-8").write(body)
     note["text"] = body
     note["mnemonic"] = text
+
+
+def add_lookalike(note, other):
+    """Append a [[link]] to the note's Lookalikes section, creating it just
+    before Components if needed. Used when a wrong guess turns out to be
+    another character's meaning -- a confusion observed, not predicted."""
+    if other in note["lookalikes"]:
+        return
+    body = note["text"]
+    link = f"- [[{P['prefix']}{other}]]\n"
+    sec = re.search(re.escape(LOOKALIKES_HEADING) + r"\n((?:- .*\n)*)", body)
+    if sec:
+        body = body[:sec.end()] + link + body[sec.end():]
+    else:
+        i = body.index("### 🧱 Components")
+        body = body[:i] + f"{LOOKALIKES_HEADING}\n{link}\n" + body[i:]
+    open(note["path"], "w", encoding="utf-8").write(body)
+    note["text"] = body
+    note["lookalikes"].append(other)
 
 
 # ---------------------------------------------------------------- frontier
@@ -442,8 +470,17 @@ STOPWORDS = {"a", "an", "the", "to", "of", "or", "and", "for", "with",
             "this", "that", "one", "some", "etc"}
 
 
+def singular(w):
+    # duties/duty would otherwise fail even the 4-letter prefix match
+    if w.endswith("ies") and len(w) > 4:
+        return w[:-3] + "y"
+    if w.endswith("s") and not w.endswith("ss") and len(w) > 3:
+        return w[:-1]
+    return w
+
+
 def significant_words(s):
-    return [w for w in re.findall(r"[a-zA-Z']+", s.lower())
+    return [singular(w) for w in re.findall(r"[a-zA-Z']+", s.lower())
            if len(w) > 2 and w not in STOPWORDS]
 
 
@@ -490,7 +527,7 @@ def find_mixup(guess, k, kanji, meaning_idx, n=3):
             for k2 in ks:
                 if k2 != k:
                     hits[k2] += 1
-    return [k2 for k2, _ in hits.most_common(n)]
+    return [k2 for k2, _ in sorted(hits.items(), key=lambda kv: (-kv[1], kv[0]))[:n]]
 
 
 class _Quit(Exception):
@@ -630,6 +667,37 @@ def do_mnemonic(k, d):
             save_mnemonic_if_real(d, note, "saved")
 
 
+def study(k, d, ctx, n, total):
+    """First sight of a character is a study card, not a test. Testing a
+    character you've never seen can only end in a give-up, and the SRS
+    scores that as a lapse -- a permanent ease penalty for something never
+    learned. Nothing is graded here; the real test comes a few cards later.
+    Returns False on quit."""
+    kanji, vocab, comp_meanings = ctx["kanji"], ctx["vocab"], ctx["comp_meanings"]
+    print(f"\n{C['dim']}{'─' * 52}{C['0']}")
+    print(f"{C['dim']}{n}/{total}   {level_label(d['text'])}   {C['0']}{C['y']}new{C['0']}")
+    print(f"\n      {C['b']}{C['c']}{k}{C['0']}   {C['g']}{meaning(d['text'])}{C['0']}\n")
+    if also_means(d["text"]):
+        print(f"  {C['dim']}also: {also_means(d['text'])}{C['0']}")
+    show_components(d, comp_meanings)
+    if d["mnemonic"]:
+        print(f"  {C['y']}your mnemonic:{C['0']} {d['mnemonic']}")
+    elif d["suggested"]:
+        show_suggested(d)
+    if d["vocab"]:
+        show_vocab_hint(d, vocab)
+    if d["lookalikes"]:
+        print(f"  {C['y']}don't confuse with:{C['0']}")
+        for k2 in d["lookalikes"]:
+            print(f"    {k2}  ({short(kanji[k2]['text'])})")
+    try:
+        _read(f"{C['dim']}  study it, then enter -- you'll be tested in a few cards{C['0']}  ")
+    except _Quit:
+        return False
+    log_attempt(k, [["study"]], "studied")
+    return True
+
+
 def ask(k, d, ctx, n, total):
     """The lookups on offer are the same from the very first prompt as after
     a miss -- c/v/s just loop back for another guess, no separate one-shot
@@ -718,6 +786,16 @@ def ask(k, d, ctx, n, total):
                     for k2 in mixups:
                         print(f"    {k2}  ({meaning(kanji[k2]['text'])})")
                     print(f"  {C['dim']}maybe that's what you're thinking of{C['0']}")
+                    # only shape-related confusions become lookalikes: a
+                    # candidate that merely shares a meaning word (険 'deep'
+                    # -> 深) is a meaning mix-up, not something that looks alike
+                    for k2 in mixups:
+                        if (k2 not in d["lookalikes"]
+                                and set(d["comps"]) & set(kanji[k2]["comps"])):
+                            add_lookalike(d, k2)
+                            add_lookalike(kanji[k2], k)
+                            print(f"  {C['dim']}{k} and {k2} added to each other's "
+                                 f"lookalikes{C['0']}")
                 # repeated blind guessing trains the wrong association -- force
                 # a real clue in rather than let it loop unaided. your own
                 # mnemonic (if any) is the cheapest, most tailored one, so it
@@ -756,6 +834,11 @@ def drill_groups(ctx, state, groups, label):
     graded = tagged = 0
     for title, members in groups:
         print(f"\n{C['b']}{C['c']}{title}{C['0']}")
+        unseen = [k for k in members if k not in state]
+        for i, k in enumerate(unseen, 1):
+            if not study(k, kanji[k], ctx, i, len(unseen)):
+                save_state(state)
+                return
         order = members[:]
         random.shuffle(order)
         for i, k in enumerate(order, 1):
@@ -787,9 +870,10 @@ def drill_groups(ctx, state, groups, label):
     print(f"{graded} graded across {len(groups)} {label} · {tagged} newly tagged known")
 
 
-def confusable_session(ctx, state, n_clusters):
+def confusable_session(ctx, state, n_clusters, levels=None):
     kanji, comp_idx = ctx["kanji"], ctx["comp_idx"]
-    clusters = rank_clusters(build_clusters(kanji, comp_idx), kanji)[:n_clusters]
+    clusters = [c for c in rank_clusters(build_clusters(kanji, comp_idx), kanji)
+                if in_levels(kanji, c[1], levels)][:n_clusters]
     if not clusters:
         print("no confusable clusters need drilling right now")
         return
@@ -798,7 +882,7 @@ def confusable_session(ctx, state, n_clusters):
          members) for anchor, members, unknown in clusters], "clusters")
 
 
-def lookalike_groups(kanji, state, n):
+def lookalike_groups(kanji, state, n, levels=None):
     """A character plus the ones listed under its Lookalikes, worst first:
     still-unknown before known, then lowest ease, then never-studied. A
     character joins at most one group per session so the same pair isn't
@@ -808,7 +892,9 @@ def lookalike_groups(kanji, state, n):
         return (kanji[k]["known"], c["ease"] if c else 3.0)
 
     groups, used = [], set()
-    for k in sorted((k for k, d in kanji.items() if d["lookalikes"]), key=struggle):
+    anchors = (k for k, d in kanji.items()
+               if d["lookalikes"] and in_levels(kanji, [k], levels))
+    for k in sorted(anchors, key=struggle):
         if k in used:
             continue
         members = [k] + [x for x in kanji[k]["lookalikes"] if x not in used]
@@ -821,13 +907,32 @@ def lookalike_groups(kanji, state, n):
     return groups
 
 
-def lookalike_session(ctx, state, n_groups):
-    groups = lookalike_groups(ctx["kanji"], state, n_groups)
+def lookalike_session(ctx, state, n_groups, levels=None):
+    groups = lookalike_groups(ctx["kanji"], state, n_groups, levels)
     if not groups:
         print(f"no lookalike groups in this vault yet (add a {LOOKALIKES_HEADING} "
               f"section of links to a note)")
         return
     drill_groups(ctx, state, groups, "lookalike groups")
+
+
+def parse_levels(spec):
+    """'n5-n4', 'n3', 'n3,n2' (Japanese) or '1-3', '2' (Chinese), in the
+    vault's own level names; a range runs in either direction."""
+    order = P["levels"]
+    out = set()
+    for part in spec.lower().replace(" ", "").split(","):
+        ends = part.split("-")
+        if len(ends) > 2 or any(e not in order for e in ends):
+            sys.exit(f"--level {spec!r}: use levels from {', '.join(order)}, "
+                     f"e.g. {order[0]}-{order[1]}")
+        a, b = sorted(order.index(e) for e in ends) if len(ends) == 2 else [order.index(ends[0])] * 2
+        out.update(order[a:b + 1])
+    return out
+
+
+def in_levels(kanji, chars, levels):
+    return levels is None or any(level(kanji[k]["text"]) in levels for k in chars)
 
 
 def main():
@@ -846,8 +951,11 @@ def main():
     ap.add_argument("--lookalikes", type=int, nargs="?", const=5, default=None,
                     metavar="N", help="drill N groups of characters you mistake for "
                     "each other, from their Lookalikes sections (default 5)")
+    ap.add_argument("--level", metavar="RANGE",
+                    help="only these levels, e.g. n5-n4 or n3 (Chinese: 1-2)")
     args = ap.parse_args()
     use_vault(args.vault)
+    levels = parse_levels(args.level) if args.level else None
 
     kanji, vocab = build()
     ctx = {
@@ -861,22 +969,24 @@ def main():
     now = today()
 
     if args.confusable is not None:
-        confusable_session(ctx, state, args.confusable)
+        confusable_session(ctx, state, args.confusable, levels)
         return
     if args.lookalikes is not None:
-        lookalike_session(ctx, state, args.lookalikes)
+        lookalike_session(ctx, state, args.lookalikes, levels)
         return
 
     due_all = [k for k, c in state.items()
-              if c.get("due", 0) <= now and k in kanji and not kanji[k]["known"]]
+              if c.get("due", 0) <= now and k in kanji and not kanji[k]["known"]
+              and in_levels(kanji, [k], levels)]
     due_all.sort(key=lambda k: state[k].get("due", 0))  # most overdue first
     reserve = max(0, min(args.reserve, args.new, args.max // 2))
     due = due_all[:args.max - reserve]
     deferred = len(due_all) - len(due)
-    fresh = [k for k in frontier(kanji) if k not in state][:max(reserve, args.max - len(due))][:args.new]
+    fresh = [k for k in frontier(kanji) if k not in state and in_levels(kanji, [k], levels)
+             ][:max(reserve, args.max - len(due))][:args.new]
 
     if args.plan:
-        print(f"{len(due)} due · {len(fresh)} new queued"
+        print((f"[{args.level}] " if levels else "") + f"{len(due)} due · {len(fresh)} new queued"
              + (f" · {deferred} due deferred to a later session" if deferred else ""))
         for k in fresh[:25]:
             d = kanji[k]
@@ -897,11 +1007,17 @@ def main():
         queue.insert(round((j + 1) * len(due) / (len(fresh) + 1)) + j, k)
 
     graded = tagged = 0
-    requeued = set()
+    requeued, studied = set(), set()
     i = 0
     while i < len(queue):
         k = queue[i]
         i += 1
+        if k not in state and k not in studied:
+            if not study(k, kanji[k], ctx, i, len(queue)):
+                break
+            studied.add(k)
+            queue.insert(min(len(queue), i + random.randint(3, 6)), k)
+            continue
         result = ask(k, kanji[k], ctx, i, len(queue))
         if result is None:
             break
@@ -923,10 +1039,11 @@ def main():
             print(f"  {C['dim']}next in {card['ivl']}d{C['0']}")
 
     save_state(state)
-    remaining = sum(1 for d in kanji.values() if not d["known"])
+    remaining = sum(1 for k, d in kanji.items()
+                    if not d["known"] and in_levels(kanji, [k], levels))
     print(f"\n{C['dim']}{'─' * 52}{C['0']}")
     print(f"{graded} graded · {tagged} newly tagged known · "
-          f"{remaining} {P['noun']} left unknown"
+          f"{remaining} {(args.level + ' ') if levels else ''}{P['noun']} left unknown"
           + (f" · {deferred} due held back, raise --max to clear the backlog"
              if deferred else ""))
 
