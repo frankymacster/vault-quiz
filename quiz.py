@@ -28,6 +28,8 @@ catches those.
     python3 quiz.py --vault <vault> --plan       # show the queue, ask nothing
     python3 quiz.py --vault <vault> --confusable [N]   # drill N shared-component clusters
     python3 quiz.py --vault <vault> --lookalikes [N]   # drill N lookalike groups
+    python3 quiz.py --vault <vault> --hard [N]         # re-study the N most-missed cards
+    python3 quiz.py --vault <vault> --level n5-n4      # any mode, limited to these levels
 
 Each vault has a launcher (quiz_kanji.py / quiz_hanzi.py) that fills in --vault.
 """
@@ -130,6 +132,8 @@ def accepted(text):
     return [a.strip() for a in m.group(1).split(",")] if m else []
 
 
+ANCHOR = "**Anchor:**"   # [[Vocab-...]] override for the word a character is
+                         # learned through; otherwise anchor_word() picks one
 ALSO_MEANS = "**Also means:**"   # dictionary senses past the first three
 
 
@@ -281,6 +285,30 @@ def add_lookalike(note, other):
     note["lookalikes"].append(other)
 
 
+def anchor_word(k, d, vocab):
+    """One word to learn the character through. Your hardest kanji are
+    nearly all ones you know no word for (満 0/6, 験 0/5, 任 0/3), and their
+    meanings blur within a family (検 'examination' vs 験 'verification');
+    words don't blur that way -- 検査 is not 試験. Prefers an explicit
+    **Anchor:** link, then a word you already know, then the most basic
+    two-character compound; never the bare character itself."""
+    m = re.search(r"^" + re.escape(ANCHOR) + r"\s*\[\[Vocab-([^\]]+)\]\]", d["text"], re.M)
+    if m and nfc(m.group(1)) in vocab:
+        return nfc(m.group(1))
+    cands = [w for w in d["vocab"] if w in vocab and w != k]
+    if not cands:
+        return None
+    return min(cands, key=lambda w: (not vocab[w]["known"],
+                                     LEVEL_ORDER.get(level(vocab[w]["text"]), 99),
+                                     len(w) != 2, len(w)))
+
+
+def anchor_line(d, vocab):
+    v = vocab[d["anchor"]]["text"]
+    gloss = re.split(r"[;,]", meaning(v))[0].strip()
+    return f"{d['anchor']}  {C['dim']}{reading_of(v)}{C['0']}  -- {gloss}"
+
+
 # ---------------------------------------------------------------- frontier
 
 def build():
@@ -299,6 +327,7 @@ def build():
                                                       + r"([^\]]+)\]\]", look)]
     for k, d in kanji.items():
         d["lookalikes"] = [x for x in d["lookalikes"] if x in kanji]
+        d["anchor"] = anchor_word(k, d, vocab)
 
     known_v = {w for w, d in vocab.items() if d["known"]}
     known_k = {k for k, d in kanji.items() if d["known"]}
@@ -440,15 +469,32 @@ def save_state(state):
               ensure_ascii=False, indent=1, sort_keys=True)
 
 
+HARD_LAPSES = 3          # misses before a card counts as hard
+HARD_STEPS = [1, 3, 7]   # days after each correct answer while relearning a
+                         # hard card -- SM-2's 1 -> 6 -> ~15 jump lets it
+                         # slip again before it has settled
+
+
+def is_hard(card):
+    return card.get("lapses", 0) >= HARD_LAPSES
+
+
 def schedule(card, grade):
-    """SM-2, lightly trimmed. grade: 1 again, 2 hard, 3 good, 4 easy."""
+    """SM-2, lightly trimmed. grade: 1 again, 2 hard, 3 good, 4 easy. Misses
+    are counted (lapses); a hard card climbs back through HARD_STEPS before
+    normal growth resumes."""
     ease = card.get("ease", 2.5)
     reps = card.get("reps", 0)
     ivl = card.get("ivl", 0)
+    lapses = card.get("lapses", 0)
     if grade == 1:
         reps, ivl, ease = 0, 0, max(1.3, ease - 0.2)
+        lapses += 1
     else:
-        if reps == 0:
+        stepping = lapses >= HARD_LAPSES and reps < len(HARD_STEPS)
+        if stepping:
+            ivl = HARD_STEPS[reps]
+        elif reps == 0:
             ivl = 1
         elif reps == 1:
             ivl = 6
@@ -457,10 +503,11 @@ def schedule(card, grade):
         if grade == 2:
             ease = max(1.3, ease - 0.15)
         elif grade == 4:
-            ivl = round(ivl * 1.3)
+            if not stepping:
+                ivl = round(ivl * 1.3)
             ease += 0.15
         reps += 1
-    card.update(ease=round(ease, 2), reps=reps, ivl=ivl, due=today() + ivl)
+    card.update(ease=round(ease, 2), reps=reps, ivl=ivl, lapses=lapses, due=today() + ivl)
     return card
 
 
@@ -616,15 +663,15 @@ def menu(lead, options):
 
 FIRST_MENU = menu("type the meaning", [
     ("c", "components"), ("v", "vocab"), ("s", "similar"),
-    ("m", "mnemonic"), ("q", "quit"),
+    ("m", "mnemonic"), ("w", "word"), ("q", "quit"),
 ])
 RETRY_MENU = menu("try again", [
     ("c", "components"), ("v", "vocab"), ("s", "similar"),
-    ("m", "mnemonic"), ("r", "I was right"), ("g", "give up"),
+    ("m", "mnemonic"), ("w", "word"), ("r", "I was right"), ("g", "give up"),
 ])
 
 
-STRAY_KEYS = {"c", "v", "s", "m", "r", "g", "q", "k", "h"}   # every letter that means
+STRAY_KEYS = {"c", "v", "s", "m", "w", "r", "g", "q", "k", "h"}   # every letter that means
                                                    # something elsewhere in
                                                    # the menus -- typed here
                                                    # out of habit, not content
@@ -637,6 +684,13 @@ def save_mnemonic_if_real(d, text, verb):
         return
     set_mnemonic(d, text)
     print(f"  {C['g']}{verb}{C['0']}")
+
+
+def show_anchor(d, vocab):
+    if d["anchor"]:
+        print(f"  {C['y']}as in:{C['0']} {anchor_line(d, vocab)}")
+    else:
+        print(f"  {C['dim']}no word in the vault to anchor this one{C['0']}")
 
 
 def show_suggested(d):
@@ -667,7 +721,7 @@ def do_mnemonic(k, d):
             save_mnemonic_if_real(d, note, "saved")
 
 
-def study(k, d, ctx, n, total):
+def study(k, d, ctx, n, total, label="new"):
     """First sight of a character is a study card, not a test. Testing a
     character you've never seen can only end in a give-up, and the SRS
     scores that as a lapse -- a permanent ease penalty for something never
@@ -675,10 +729,12 @@ def study(k, d, ctx, n, total):
     Returns False on quit."""
     kanji, vocab, comp_meanings = ctx["kanji"], ctx["vocab"], ctx["comp_meanings"]
     print(f"\n{C['dim']}{'─' * 52}{C['0']}")
-    print(f"{C['dim']}{n}/{total}   {level_label(d['text'])}   {C['0']}{C['y']}new{C['0']}")
+    print(f"{C['dim']}{n}/{total}   {level_label(d['text'])}   {C['0']}{C['y']}{label}{C['0']}")
     print(f"\n      {C['b']}{C['c']}{k}{C['0']}   {C['g']}{meaning(d['text'])}{C['0']}\n")
     if also_means(d["text"]):
         print(f"  {C['dim']}also: {also_means(d['text'])}{C['0']}")
+    if d["anchor"]:
+        show_anchor(d, vocab)
     show_components(d, comp_meanings)
     if d["mnemonic"]:
         print(f"  {C['y']}your mnemonic:{C['0']} {d['mnemonic']}")
@@ -730,7 +786,7 @@ def ask(k, d, ctx, n, total):
         last_wrong, last_wrong_cold = None, False
         while True:
             low = guess.lower()
-            if low in ("c", "v", "s", "m"):
+            if low in ("c", "v", "s", "m", "w"):
                 cold = False
                 events.append(["hint", low])
                 if low == "c":
@@ -739,6 +795,8 @@ def ask(k, d, ctx, n, total):
                     show_vocab_hint(d, vocab)
                 elif low == "s":
                     show_similar(k, d, kanji, comp_idx)
+                elif low == "w":
+                    show_anchor(d, vocab)
                 else:
                     do_mnemonic(k, d)
             elif low == "r":
@@ -755,6 +813,8 @@ def ask(k, d, ctx, n, total):
             elif not guess or low == "g":
                 events.append(["give_up"])
                 print(f"  {C['r']}✗ {k} means:{C['0']} {answer}")
+                if d["anchor"]:
+                    show_anchor(d, vocab)
                 grade = 1
                 if d["unlocks"]:
                     print(f"  {C['dim']}unlocks {d['unlocks']} more words{C['0']}")
@@ -800,7 +860,10 @@ def ask(k, d, ctx, n, total):
                 # a real clue in rather than let it loop unaided. your own
                 # mnemonic (if any) is the cheapest, most tailored one, so it
                 # surfaces before the generic vocab/component/similar aids
-                if misses == 1 and d["mnemonic"]:
+                if misses == 1 and d["anchor"] and is_hard(ctx["state"].get(k, {})):
+                    events.append(["auto_hint", "w"])
+                    show_anchor(d, vocab)
+                elif misses == 1 and d["mnemonic"]:
                     events.append(["auto_hint", "m"])
                     print(f"  {C['y']}your mnemonic:{C['0']} {d['mnemonic']}")
                 elif misses == 1 and d["suggested"]:
@@ -857,6 +920,12 @@ def drill_groups(ctx, state, groups, label):
             else:
                 print(f"  {C['dim']}next in {card['ivl']}d{C['0']}")
 
+        try:
+            reverse_round(members, ctx)
+        except _Quit:
+            save_state(state)
+            return
+
         print(f"\n  {C['y']}side by side:{C['0']}")
         for k in members:
             parts = "  ".join(f"{c}({comp_meanings.get(c, '?').split(',')[0].strip()})"
@@ -868,6 +937,80 @@ def drill_groups(ctx, state, groups, label):
     save_state(state)
     print(f"\n{C['dim']}{'─' * 52}{C['0']}")
     print(f"{graded} graded across {len(groups)} {label} · {tagged} newly tagged known")
+
+
+def reverse_round(members, ctx):
+    """The other direction: given a meaning, pick which of the group it is.
+    Recalling each meaning on its own isn't the hard part for a family like
+    険 検 験 剣 -- keeping straight which part goes with which meaning is,
+    and this drills exactly that mapping. Practice only: not scheduled, but
+    logged."""
+    kanji, comp_meanings = ctx["kanji"], ctx["comp_meanings"]
+    senses = {k: [s.strip() for s in meaning(kanji[k]["text"]).split(",")] for k in members}
+    cue = {k: senses[k][0] for k in members}
+    for k in members:
+        if list(cue.values()).count(cue[k]) > 1:
+            cue[k] = ", ".join(senses[k][:2])
+    opts = "  ".join(f"{i}) {k}" for i, k in enumerate(members, 1))
+    print(f"\n  {C['y']}now the other way -- which one is it?{C['0']}")
+    right = 0
+    order = members[:]
+    random.shuffle(order)
+    for k in order:
+        ans = _read(f"  {C['b']}{cue[k]}{C['0']}   {C['dim']}{opts}{C['0']}  ")
+        pick = (members[int(ans) - 1] if ans.isdigit() and 1 <= int(ans) <= len(members)
+                else ans.strip()[:1])
+        if pick == k:
+            right += 1
+            print(f"  {C['g']}✓ {k}{C['0']}")
+            log_attempt(k, [["reverse", pick]], "reverse_ok")
+        else:
+            parts = "  ".join(f"{c}({comp_meanings.get(c, '?').split(',')[0].strip()})"
+                              for c in kanji[k]["comps"])
+            print(f"  {C['r']}✗ it's {k}{C['0']}  {C['dim']}{parts}{C['0']}")
+            log_attempt(k, [["reverse", pick]], "reverse_miss")
+    print(f"  {C['dim']}{right}/{len(order)} the other way{C['0']}")
+
+
+def hard_session(ctx, state, n, levels=None):
+    """Cards that have failed HARD_LAPSES+ times. Repeating them as they are
+    hasn't worked, so each is re-studied (anchor word first), you're asked
+    to rewrite the mnemonic that didn't stick, then all are tested with the
+    usual same-session retry. Their schedule climbs back through HARD_STEPS
+    (1, 3, 7 days) before normal growth resumes."""
+    kanji = ctx["kanji"]
+    cards = sorted((k for k, c in state.items()
+                    if k in kanji and is_hard(c) and not kanji[k]["known"]
+                    and in_levels(kanji, [k], levels)),
+                   key=lambda k: (-state[k]["lapses"], state[k]["ease"]))[:n]
+    if not cards:
+        print(f"no hard cards (missed {HARD_LAPSES}+ times) right now")
+        return
+    print(f"\n{C['b']}{C['c']}{len(cards)} hard cards{C['0']}  "
+          f"{C['dim']}re-study each, rewrite what didn't stick, then the test{C['0']}")
+    for i, k in enumerate(cards, 1):
+        d = kanji[k]
+        print(f"\n{C['dim']}missed {state[k]['lapses']} times{C['0']}", end="")
+        if not study(k, d, ctx, i, len(cards), label="re-study"):
+            save_state(state)
+            return
+        try:
+            lead = ("this mnemonic hasn't been working -- write a new one, built on the word "
+                    "or the parts (blank keeps it)" if d["mnemonic"]
+                    else "write a mnemonic, built on the word or the parts (blank to skip)")
+            note = _read(f"{C['dim']}  {lead}{C['0']}  ")
+        except _Quit:
+            save_state(state)
+            return
+        if note:
+            save_mnemonic_if_real(d, note, "saved")
+    queue = cards[:]
+    random.shuffle(queue)
+    graded, tagged = run_queue(ctx, state, queue)
+    save_state(state)
+    left = sum(1 for k, c in state.items() if k in kanji and is_hard(c) and not kanji[k]["known"])
+    print(f"\n{C['dim']}{'─' * 52}{C['0']}")
+    print(f"{graded} graded · {tagged} newly tagged known · {left} hard cards in total")
 
 
 def confusable_session(ctx, state, n_clusters, levels=None):
@@ -951,6 +1094,9 @@ def main():
     ap.add_argument("--lookalikes", type=int, nargs="?", const=5, default=None,
                     metavar="N", help="drill N groups of characters you mistake for "
                     "each other, from their Lookalikes sections (default 5)")
+    ap.add_argument("--hard", type=int, nargs="?", const=8, default=None, metavar="N",
+                    help=f"re-study and test the N cards missed most ({HARD_LAPSES}+ misses; "
+                    "default 8)")
     ap.add_argument("--level", metavar="RANGE",
                     help="only these levels, e.g. n5-n4 or n3 (Chinese: 1-2)")
     args = ap.parse_args()
@@ -966,6 +1112,7 @@ def main():
         "meaning_idx": build_meaning_index(kanji),
     }
     state = load_state()
+    ctx["state"] = state
     now = today()
 
     if args.confusable is not None:
@@ -973,6 +1120,9 @@ def main():
         return
     if args.lookalikes is not None:
         lookalike_session(ctx, state, args.lookalikes, levels)
+        return
+    if args.hard is not None:
+        hard_session(ctx, state, args.hard, levels)
         return
 
     due_all = [k for k, c in state.items()
@@ -1006,6 +1156,22 @@ def main():
     for j, k in enumerate(fresh):
         queue.insert(round((j + 1) * len(due) / (len(fresh) + 1)) + j, k)
 
+    graded, tagged = run_queue(ctx, state, queue)
+
+    save_state(state)
+    remaining = sum(1 for k, d in kanji.items()
+                    if not d["known"] and in_levels(kanji, [k], levels))
+    print(f"\n{C['dim']}{'─' * 52}{C['0']}")
+    print(f"{graded} graded · {tagged} newly tagged known · "
+          f"{remaining} {(args.level + ' ') if levels else ''}{P['noun']} left unknown"
+          + (f" · {deferred} due held back, raise --max to clear the backlog"
+             if deferred else ""))
+
+
+def run_queue(ctx, state, queue):
+    """The review loop: unseen cards get a study card first and are tested a
+    few cards later; a miss comes back once more in the same session."""
+    kanji = ctx["kanji"]
     graded = tagged = 0
     requeued, studied = set(), set()
     i = 0
@@ -1030,7 +1196,8 @@ def main():
             requeued.add(k)
             pos = min(len(queue), i + random.randint(3, 6))
             queue.insert(pos, k)
-            print(f"  {C['dim']}back in {pos - i} cards{C['0']}")
+            print(f"  {C['dim']}" + (f"back in {pos - i} cards" if pos > i else "back next")
+                  + f"{C['0']}")
         elif card["ivl"] >= MATURE:
             mark_known(kanji[k])
             tagged += 1
@@ -1038,14 +1205,7 @@ def main():
         else:
             print(f"  {C['dim']}next in {card['ivl']}d{C['0']}")
 
-    save_state(state)
-    remaining = sum(1 for k, d in kanji.items()
-                    if not d["known"] and in_levels(kanji, [k], levels))
-    print(f"\n{C['dim']}{'─' * 52}{C['0']}")
-    print(f"{graded} graded · {tagged} newly tagged known · "
-          f"{remaining} {(args.level + ' ') if levels else ''}{P['noun']} left unknown"
-          + (f" · {deferred} due held back, raise --max to clear the backlog"
-             if deferred else ""))
+    return graded, tagged
 
 
 if __name__ == "__main__":
