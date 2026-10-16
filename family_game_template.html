@@ -255,6 +255,9 @@ const S = {
   day: store.get("day", {}),
   introDay: store.get("introDay", {}),
   recent: store.get("recent", []),
+  startedAt: store.get("startedAt", {}),
+  second: store.get("second", {}),
+  partsOk: store.get("partsOk", {}),
   planMix: [],
   wstreak: store.get("wstreak", {}),
   mixups: store.get("mixups", {}),
@@ -313,6 +316,7 @@ function countKanji(k, ok, fresh) {
   if (!r) return;
   const log = dayLog();
   log[r.what]++;
+  if (r.what === "started") { S.startedAt[k] = Math.floor(Date.now() / 1000); store.set("startedAt", S.startedAt); }
   if (r.card.ivl >= MATURE) { r.card.known = true; log.matured++; }
   S.ov[k] = { ...r.card, t: Math.floor(Date.now() / 1000) };
   store.set("ov", S.ov); store.set("day", S.day);
@@ -508,7 +512,7 @@ function answerMeaning(i) {
     $("check").innerHTML = `✓ ${R.rev ? k + " " : ""}${right}${whyHTML(k)}`;
     setTimeout(buildAdvance, 1500);
   } else {
-    S.streak = 0; R.tiles[R.i].missed = true;
+    S.streak = 0; R.tiles[R.i].missed = true; S.partsOk[k] = 0; store.set("partsOk", S.partsOk);
     const btn = document.querySelectorAll(".choice")[i];
     btn.classList.add("wrong"); shake(btn);
     const lead = R.rev ? `<b>${right}</b> is ${k}; ${other} means ${K[other][0]}.` : `${k} means <b>${right}</b>; you picked the meaning of ${other}.`;
@@ -545,8 +549,17 @@ const partUsers = {};
 for (const [k, v] of Object.entries(K)) for (const c of (v[3] || [])) (partUsers[c] = partUsers[c] || []).push(k);
 const ALL_PARTS = Object.keys(partUsers).filter(c => partUsers[c].length >= 3);
 
-function buildSteps(k) {
-  const steps = ["parts"];
+// a kanji you've built right twice (past its first days, not just missed) gets the quick version of the
+// parts step: which part sets it apart from its look-alike. New, shaky or just-missed kanji keep the full grid.
+function spotRival(k, tile) {
+  const c = kCard(k);
+  if (tile.fresh || tile.retry || !c || c.ivl < 6 || (S.partsOk[k] || 0) < 2) return null;
+  return rivals(k).find(x => groupParts([k, x]).diff[k].length) || null;
+}
+function buildSteps(k, tile) {
+  const rival = spotRival(k, tile);
+  if (rival) tile.rival = rival;
+  const steps = [rival ? "spot" : "parts"];
   if (Object.values((D.roles && D.roles[k]) || {}).includes("s")) steps.push("sound");
   steps.push("meaning");
   // the reading is asked inside the kanji's anchor word, where the word decides which reading applies
@@ -650,7 +663,7 @@ function startBuild(pick) {
 function buildTileStart() {
   const R = S.round, { k } = R.tiles[R.i];
   if (R.tiles[R.i].study) return newStudy(k);
-  R.steps = buildSteps(k); R.si = 0; R.hinted = false;
+  R.steps = buildSteps(k, R.tiles[R.i]); R.si = 0; R.hinted = false;
   R.results.push({ k, parts: null, sound: null, mean: null, reading: null });
   renderBar();
   const f = soundFamilyOf(k);
@@ -659,6 +672,7 @@ function buildTileStart() {
 function buildRun() {
   const R = S.round, step = R.steps[R.si];
   if (step === "parts") return partsStep();
+  if (step === "spot") return spotStep();
   if (step === "sound") return soundPartStep();
   if (step === "meaning") return meaningStep();
   if (step === "anchor") return anchorStep();
@@ -719,6 +733,7 @@ function checkParts() {
   const picked = [...R.sel].map(i => R.opts[i]);
   const ok = picked.length === mine.length && mine.every(c => picked.includes(c));
   R.results[R.results.length - 1].parts = ok;
+  S.partsOk[k] = ok ? (S.partsOk[k] || 0) + 1 : 0; store.set("partsOk", S.partsOk);
   record({ step: "build_parts", k, status: K[k][2], right: mine, picked, ok });
   if (ok) {
     S.streak++; bumpBest();
@@ -738,6 +753,47 @@ function checkParts() {
     S.afterReview = buildAdvance;
     $("cont").addEventListener("click", continueReview);
   }
+}
+
+function spotStep() {
+  const R = S.round, t = R.tiles[R.i], { k } = t, x = t.rival;
+  const { shared, diff } = groupParts([k, x]);
+  R.right = diff[k];
+  const pool = new Set([...ownParts(k), ...ownParts(x), ...shared].filter(c => c !== k && c !== x));
+  R.opts = shuffle([...pool].concat(shuffle(ALL_PARTS.filter(c => !pool.has(c) && c !== k && c !== x)).slice(0, 2))).slice(0, 6);
+  if (!R.right.some(c => R.opts.includes(c))) R.opts[0] = R.right[0], R.opts = shuffle(R.opts);
+  S.phase = "spot"; S.locked = false;
+  renderBar();
+  card(`
+    <p class="q">what makes <span class="g">${k}</span> different from <span class="g">${x}</span>?</p>
+    <div class="lglyphs"><span class="on">${k}</span><span>${x}</span></div>
+    <div class="choices fam" role="group" aria-label="Parts">
+      ${R.opts.map((c, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${c}</span><span class="m">${D.parts[c] || (K[c] ? K[c][0] : "")}</span></button>`).join("")}
+    </div>
+    <p class="check" id="check"></p>
+    <p class="sub">you've built ${k} before: just the part that tells it apart</p>`);
+  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerSpot(+b.dataset.i)));
+}
+function answerSpot(i) {
+  const R = S.round, t = R.tiles[R.i];
+  if (S.phase !== "spot" || S.locked || i >= R.opts.length) return;
+  S.locked = true;
+  const c = R.opts[i], ok = R.right.includes(c);
+  R.results[R.results.length - 1].parts = ok;
+  record({ step: "build_spot", k: t.k, rival: t.rival, right: R.right, picked: c, ok });
+  const btn = document.querySelectorAll(".choice")[i];
+  if (ok) {
+    S.streak++; bumpBest();
+    btn.classList.add("right");
+    $("check").innerHTML = `✓ ${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}${whyHTML(t.k)}`;
+    setTimeout(buildAdvance, 1200);
+    return;
+  }
+  // the quick version missed: back to the full grid next time, and a closer look now
+  S.streak = 0; S.partsOk[t.k] = 0; store.set("partsOk", S.partsOk);
+  btn.classList.add("wrong"); shake(btn);
+  setTimeout(() => startContrast(t.k, [t.rival], buildAdvance, 0,
+    `${t.k} has ${R.right.join(" + ")}; ${c} is ${ownParts(t.rival).includes(c) ? "in " + t.rival + " too" : "in neither"}.`), 700);
 }
 
 // step 2: which part gives its sound?
@@ -1733,6 +1789,15 @@ function bumpBest() {
 
 // ======================= today's plan: reviews on time, contrast right after a mix-up, anchor words, then new kanji
 const targetLevel = () => LV.find(l => Object.keys(K).some(k => K[k][1] === l && kStatus(k) === "new")) || LV[LV.length - 1];
+const SECOND_AFTER = 4 * 3600;
+// kanji started today, at least four hours ago, not yet seen again today
+function secondLook() {
+  const now = Date.now() / 1000, today = todayISO();
+  const todays = Object.keys(S.startedAt).filter(k => K[k] && isoOf(new Date(S.startedAt[k] * 1000)) === today && S.second[k] !== today && !kKnown(k));
+  return { ready: todays.filter(k => now - S.startedAt[k] >= SECOND_AFTER), waiting: todays.filter(k => now - S.startedAt[k] < SECOND_AFTER),
+           opensAt: todays.length ? new Date(Math.min(...todays.map(k => S.startedAt[k])) * 1000 + SECOND_AFTER * 1000) : null };
+}
+const hhmm = d => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 function planDecide() {
   const mix = [...new Set(S.planMix)].filter(k => lookLinks(k).length);
   if (mix.length) return { label: `Lookalikes: ${mix.map(k => k + lookLinks(k)[0]).join(" ")}`, run: () => {
@@ -1749,6 +1814,13 @@ function planDecide() {
   const due = focusKanji().filter(k => (K[k][3] || []).length >= 2);
   if (due.length) return { label: `Review: ${Math.min(5, due.length)} of ${due.length} due kanji`, run: () => {
     S.mode = "build"; S.planLevels = LV; startBuild({ due: focusKanji().filter(k => (K[k][3] || []).length >= 2).slice(0, 5), fresh: [] });
+  } };
+  const sl = secondLook().ready;
+  if (sl.length) return { label: `Second look: ${Math.min(5, sl.length)} of today's new kanji`, run: () => {
+    const ks = secondLook().ready.slice(0, 5);
+    ks.forEach(k => { S.second[k] = todayISO(); }); store.set("second", S.second);
+    S.mode = "build"; S.planLevels = LV; startBuild({ due: ks, fresh: [] });
+    S.round.notice = "second look: learned earlier today";
   } };
   const dw = HAS_WORDS ? dueWords() : [];
   if (dw.length) return { label: `Anchor words: ${Math.min(6, dw.length)} of ${dw.length} due`, run: () => {
@@ -1782,6 +1854,7 @@ function planDone() {
     <p class="q">today's plan</p>
     <p class="verdict">Done for today: ${d.reviews} reviews, ${d.started} new kanji, ${d.words} word answers.</p>
     ${planStrip()}
+    ${(() => { const w = secondLook(); return w.waiting.length ? `<p class="verdict">Come back after <b>${hhmm(w.opensAt)}</b> for a 3-minute second look at today's ${w.waiting.length} new kanji: seeing them again later today is what gets them to tomorrow.</p>` : ""; })()}
     <p class="hint">${dueTomorrow} kanji are due by tomorrow. Stopping here is fine: spacing is what makes it last.
       ${newLeft() === 0 && newCandidates().length ? "New kanji are paused for today so your reviews keep up." : ""}</p>
     <div class="row">
@@ -1852,7 +1925,8 @@ function renderProgress() {
 function renderHome() {
   renderProgress();
   const next = planDecide(); S.planLevels = null;
-  $("plan-note").textContent = `Next: ${next.label}. Due reviews come first, look-alikes right after a mix-up, then your anchor words and new kanji (${newLeft()} left today at ${targetLevel().toUpperCase()}).`;
+  const w = secondLook();
+  $("plan-note").textContent = (w.waiting.length && !w.ready.length ? `Second look at today's ${w.waiting.length} new kanji opens at ${hhmm(w.opensAt)}. ` : "") + `Next: ${next.label}. Due reviews come first, look-alikes right after a mix-up, then your anchor words and new kanji (${newLeft()} left today at ${targetLevel().toUpperCase()}).`;
   const fk = focusKanji();
   if (S.mode === "knew") {
     $("due-note").textContent = `${newCandidates().length} kanji not started at ${S.level.toUpperCase()}; ${newLeft()} more today keeps your reviews manageable. ` +
@@ -1923,12 +1997,13 @@ document.addEventListener("keydown", e => {
   if (S.phase === "parts" && /^[1-9]$/.test(e.key)) { e.preventDefault(); togglePart(+e.key - 1); return; }
   if (S.phase === "parts" && e.key === "Enter") { e.preventDefault(); checkParts(); return; }
   if (S.phase === "soundpart" && /^[1-9]$/.test(e.key)) { e.preventDefault(); answerSoundPart(+e.key - 1); return; }
+  if (S.phase === "spot" && /^[1-9]$/.test(e.key)) { e.preventDefault(); answerSpot(+e.key - 1); return; }
   if (S.phase === "banchor" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerAnchor(+e.key - 1); return; }
   if (S.phase === "bteach" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueAnchor(); return; }
   if (S.phase === "breading" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerBuildReading(+e.key - 1); return; }
   if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (["meaning", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick", "cx", "cxfb", "cxdone"].includes(S.phase)) {
+  } else if (["meaning", "parts", "spot", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick", "cx", "cxfb", "cxdone"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });
