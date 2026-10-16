@@ -4,7 +4,10 @@
 parts from the IDS data, with your known / learning / hard / not-started
 status on every character.
 
-    python3 family_tree.py <vault> <out.html>
+    python3 family_tree.py <vault> <out.html> [template]
+
+template defaults to family_tree_template.html; family_game_template.html
+writes the Kanji Family Builder game from the same data.
 """
 import collections, datetime, json, os, re, sys
 
@@ -80,7 +83,8 @@ data = {
 }
 blob = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 assert "</script" not in blob
-template = open(os.path.join(HERE, "family_tree_template.html"), encoding="utf-8").read()
+tpl = sys.argv[3] if len(sys.argv) > 3 else "family_tree_template.html"
+template = open(os.path.join(HERE, tpl), encoding="utf-8").read()
 open(sys.argv[2], "w", encoding="utf-8").write(template.replace("__DATA__", blob))
 st = collections.Counter(v[2] for v in data["kanji"].values())
 print(f"{len(fams)} families, {len(data['roots'])} top-level, {len(data['loners'])} on their own; {dict(st)}")
