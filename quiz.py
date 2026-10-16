@@ -31,6 +31,7 @@ catches those.
     python3 quiz.py --vault <vault> --hard [N]         # re-study the N most-missed cards
     python3 quiz.py --vault <vault> --level n5-n4      # any mode, limited to these levels
     python3 quiz.py --vault <vault> --clusters         # new cards family by family
+    python3 quiz.py --vault <vault> --vocab            # words: reading, then meaning
 
 Each vault has a launcher (quiz_kanji.py / quiz_hanzi.py) that fills in --vault.
 """
@@ -46,11 +47,11 @@ import sys
 import unicodedata
 
 PROFILES = {
-    "Kanji": dict(prefix="Kanji-", noun="kanji", reading="Reading (Kana)",
+    "Kanji": dict(prefix="Kanji-", noun="kanji", reading="Reading (Kana)", reading_kind="kana",
                   level_re=r"jlpt/(n\d|unlisted)", level_fmt="{}",
                   levels=["n5", "n4", "n3", "n2", "n1", "unlisted"],
                   family_levels=["n5", "n4", "n3", "n2", "n1"]),
-    "Characters": dict(prefix="Hanzi-", noun="hanzi", reading="Pinyin",
+    "Characters": dict(prefix="Hanzi-", noun="hanzi", reading="Pinyin", reading_kind="pinyin",
                        level_re=r"hsk/(\d)", level_fmt="hsk{}",
                        levels=["1", "2", "3", "4", "5", "6"],
                        family_levels=["1", "2", "3", "4", "5", "6"]),
@@ -537,14 +538,15 @@ def today():
     return datetime.date.today().toordinal()
 
 
-def load_state():
-    if os.path.exists(STATE):
-        return json.load(open(STATE, encoding="utf-8"))
+def load_state(path=None):
+    path = path or STATE
+    if os.path.exists(path):
+        return json.load(open(path, encoding="utf-8"))
     return {}
 
 
-def save_state(state):
-    json.dump(state, open(STATE, "w", encoding="utf-8"),
+def save_state(state, path=None):
+    json.dump(state, open(path or STATE, "w", encoding="utf-8"),
               ensure_ascii=False, indent=1, sort_keys=True)
 
 
@@ -660,7 +662,7 @@ class _Quit(Exception):
     pass
 
 
-def log_attempt(k, events, outcome, grade=None):
+def log_attempt(k, events, outcome, grade=None, log=".quiz_log.jsonl"):
     """One JSON line per question in .quiz_log.jsonl: every guess and lookup
     in order, and how it ended. The SRS state only keeps ease/interval, which
     says THAT a kanji keeps failing but not WHY -- blank, wrong concept,
@@ -670,7 +672,7 @@ def log_attempt(k, events, outcome, grade=None):
         return
     entry = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
              "char": k, "events": events, "outcome": outcome, "grade": grade}
-    with open(os.path.join(VAULT, ".quiz_log.jsonl"), "a", encoding="utf-8") as f:
+    with open(os.path.join(VAULT, log), "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
@@ -1169,6 +1171,304 @@ def show_progress(kanji, state, levels=None):
               f"{st:>10}{close:>7}{hard:>6}{t - kn - st:>6}{C['0']}")
 
 
+# ---------------------------------------------------------------- vocabulary
+
+VOCAB_STATE_FILE = ".vocab_state.json"
+VOCAB_LOG = ".vocab_log.jsonl"
+
+_ROMAJI = {
+    "a": "あ", "i": "い", "u": "う", "e": "え", "o": "お",
+    "ka": "か", "ki": "き", "ku": "く", "ke": "け", "ko": "こ",
+    "sa": "さ", "shi": "し", "si": "し", "su": "す", "se": "せ", "so": "そ",
+    "ta": "た", "chi": "ち", "ti": "ち", "tsu": "つ", "tu": "つ", "te": "て", "to": "と",
+    "na": "な", "ni": "に", "nu": "ぬ", "ne": "ね", "no": "の",
+    "ha": "は", "hi": "ひ", "fu": "ふ", "hu": "ふ", "he": "へ", "ho": "ほ",
+    "ma": "ま", "mi": "み", "mu": "む", "me": "め", "mo": "も",
+    "ya": "や", "yu": "ゆ", "yo": "よ",
+    "ra": "ら", "ri": "り", "ru": "る", "re": "れ", "ro": "ろ",
+    "wa": "わ", "wo": "を",
+    "ga": "が", "gi": "ぎ", "gu": "ぐ", "ge": "げ", "go": "ご",
+    "za": "ざ", "ji": "じ", "zi": "じ", "zu": "ず", "ze": "ぜ", "zo": "ぞ",
+    "da": "だ", "di": "ぢ", "du": "づ", "de": "で", "do": "ど",
+    "ba": "ば", "bi": "び", "bu": "ぶ", "be": "べ", "bo": "ぼ",
+    "pa": "ぱ", "pi": "ぴ", "pu": "ぷ", "pe": "ぺ", "po": "ぽ",
+    "fa": "ふぁ", "fi": "ふぃ", "fe": "ふぇ", "fo": "ふぉ", "vu": "ゔ",
+    "she": "しぇ", "che": "ちぇ", "je": "じぇ",
+}
+for _c, _i in (("k", "き"), ("g", "ぎ"), ("n", "に"), ("h", "ひ"), ("m", "み"),
+               ("r", "り"), ("b", "び"), ("p", "ぴ")):
+    for _v, _s in (("a", "ゃ"), ("u", "ゅ"), ("o", "ょ")):
+        _ROMAJI[_c + "y" + _v] = _i + _s
+for _c, _i in (("sh", "し"), ("sy", "し"), ("ch", "ち"), ("ty", "ち"), ("cy", "ち"),
+               ("j", "じ"), ("jy", "じ"), ("zy", "じ"), ("dy", "ぢ")):
+    for _v, _s in (("a", "ゃ"), ("u", "ゅ"), ("o", "ょ")):
+        _ROMAJI[_c + _v] = _i + _s
+_VOWEL = {"a": "あ", "i": "い", "u": "う", "e": "え", "o": "お"}
+_VOWEL_OF = {k: _VOWEL[r[-1]] for r, k in _ROMAJI.items() if len(k) == 1}
+_VOWEL_OF.update({"ゃ": "あ", "ゅ": "う", "ょ": "お", "ぁ": "あ", "ぃ": "い", "ぇ": "え", "ぉ": "お"})
+
+
+def to_kana(s):
+    """Romaji to hiragana, so readings can be typed without switching to a
+    Japanese keyboard. Kana typed directly pass through. 'nn', "n'" and n
+    before a consonant give ん; 'konnichi' still reads こんにち; doubled
+    consonants give っ; m before b/p (shimbun) gives ん."""
+    out, i = [], 0
+    while i < len(s):
+        ch, nxt = s[i], s[i + 1] if i + 1 < len(s) else ""
+        if not ("a" <= ch <= "z"):
+            out.append("ー" if ch == "-" else ch)
+            i += 1
+            continue
+        if ch == "n":
+            if nxt == "'":
+                out.append("ん"); i += 2; continue
+            if nxt == "n":
+                after = s[i + 2] if i + 2 < len(s) else ""
+                out.append("ん"); i += 1 if after in "aeiouy" and after else 2; continue
+            if not nxt or nxt not in "aeiouy":
+                out.append("ん"); i += 1; continue
+        if ch == "m" and nxt in ("b", "p"):
+            out.append("ん"); i += 1; continue
+        if nxt == ch and ch not in "aeioun":
+            out.append("っ"); i += 1; continue
+        for size in (3, 2, 1):
+            seg = s[i:i + size]
+            if seg in _ROMAJI:
+                out.append(_ROMAJI[seg]); i += size
+                break
+        else:
+            out.append(ch); i += 1
+    return "".join(out)
+
+
+def norm_reading(s):
+    if P["reading_kind"] == "pinyin":
+        s = unicodedata.normalize("NFD", s.lower())
+        s = "".join(ch for ch in s if not unicodedata.combining(ch))
+        return re.sub(r"[\s'0-9·\-]", "", s).replace("v", "u")
+    s = to_kana(s.strip().lower())
+    s = "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in s)
+    out = []
+    for c in s:
+        if c == "ー" and out:
+            out.append(_VOWEL_OF.get(out[-1], ""))
+        elif c not in " 　・":
+            out.append(c)
+    return "".join(out)
+
+
+def accepted_readings(w, d):
+    """Every listed reading (四 = し / よん), and a reading without the する a
+    few notes append to a noun (招待 = しょうたいする)."""
+    out = set()
+    for r in re.split(r"[\s/／、,・]+", reading_of(d["text"])):
+        if r:
+            out.add(norm_reading(r))
+            if r.endswith("する") and not w.endswith("する"):
+                out.add(norm_reading(r[:-2]))
+    return out
+
+
+def shown_reading(w, d):
+    r = reading_of(d["text"])
+    return r[:-2] if r.endswith("する") and not w.endswith("する") else r
+
+
+def vocab_ok(w, d):
+    # drops the duplicate entries written like 相談 (そうだん)
+    return bool(d["kanji"]) and not re.search(r"[(（]", w) and bool(reading_of(d["text"]))
+
+
+def vocab_order(kanji, vocab, vstate, kstate, levels=None):
+    """New words, cheapest first: every kanji already known (you can read it
+    today), then one kanji that's still being learned, then the rest -- each
+    tier by level, shorter words first."""
+    def key(w):
+        ks = [k for k in vocab[w]["kanji"] if k in kanji]
+        unknown = [k for k in ks if not kanji[k]["known"]]
+        lvl = LEVEL_ORDER.get(level(vocab[w]["text"]), 99)
+        if not unknown:
+            return (0, lvl, 0, len(w), w)
+        if len(unknown) == 1 and unknown[0] in kstate:
+            return (1, lvl, 0, len(w), w)
+        return (2, lvl, len(unknown), len(w), w)
+    cands = [w for w, d in vocab.items() if vocab_ok(w, d) and not d["known"]
+             and w not in vstate and in_levels(vocab, [w], levels)]
+    return sorted(cands, key=key)
+
+
+def vocab_reason(w, kanji, vocab, kstate):
+    unknown = [k for k in vocab[w]["kanji"] if k in kanji and not kanji[k]["known"]]
+    if not unknown:
+        return "kanji all known"
+    if len(unknown) == 1 and unknown[0] in kstate:
+        return f"{unknown[0]} still being learned"
+    return f"needs {''.join(unknown)}"
+
+
+def show_word_kanji(d, kanji):
+    print(f"  {C['y']}kanji:{C['0']}")
+    for k in d["kanji"]:
+        if k in kanji:
+            st = (f"{C['g']}known{C['0']}" if kanji[k]["known"] else f"{C['dim']}learning{C['0']}")
+            print(f"    {k}  {short(kanji[k]['text']):24}  {st}")
+
+
+def word_line(w, d):
+    return (f"{C['b']}{w}{C['0']}  {shown_reading(w, d)}  {C['dim']}--{C['0']} "
+            f"{meaning(d['text'])}")
+
+
+def vocab_study(w, d, ctx, n, total, label="new"):
+    print(f"\n{C['dim']}{'─' * 52}{C['0']}")
+    print(f"{C['dim']}{n}/{total}   {level_label(d['text'])}   {C['0']}{C['y']}{label} word{C['0']}")
+    print(f"\n      {C['b']}{C['c']}{w}{C['0']}   {shown_reading(w, d)}\n")
+    print(f"  {C['g']}{meaning(d['text'])}{C['0']}")
+    show_word_kanji(d, ctx["kanji"])
+    try:
+        _read(f"{C['dim']}  study it, then enter -- you'll be tested in a few cards{C['0']}  ")
+    except _Quit:
+        return False
+    log_attempt(w, [["study"]], "studied", log=VOCAB_LOG)
+    return True
+
+
+READ_MENU = menu("type the reading (romaji or kana)", [("k", "kanji"), ("h", "first kana"), ("q", "quit")])
+READ_RETRY = menu("try again", [("k", "kanji"), ("h", "first kana"), ("r", "I was right"), ("g", "give up")])
+MEAN_MENU = menu("now the meaning", [("k", "kanji"), ("q", "quit")])
+MEAN_RETRY = menu("try again", [("k", "kanji"), ("r", "I was right"), ("g", "give up")])
+
+
+def vocab_ask(w, d, ctx, n, total):
+    """One card, two answers: the reading (typed in romaji or kana), then the
+    meaning (graded loosely, like kanji meanings). Each part scores easy
+    (first try, no hint), good (a hint or a retry) or again (given up);
+    the card takes the lower of the two. 'r' on the meaning saves your
+    wording as accepted, the same as for kanji."""
+    kanji = ctx["kanji"]
+    print(f"\n{C['dim']}{'─' * 52}{C['0']}")
+    print(f"{C['dim']}{n}/{total}   {level_label(d['text'])}   word{C['0']}")
+    print(f"\n      {C['b']}{C['c']}{w}{C['0']}\n")
+    events = []
+    try:
+        accepted, shown = accepted_readings(w, d), shown_reading(w, d)
+        rgrade, aided, misses = None, False, 0
+        guess = _read(READ_MENU)
+        while rgrade is None:
+            low = guess.lower()
+            if low == "k":
+                aided = True; events.append(["hint", "k"]); show_word_kanji(d, kanji)
+            elif low == "h":
+                aided = True; events.append(["hint", "h"])
+                print(f"  {C['y']}starts with:{C['0']} {shown[0]}")
+            elif low == "r" and misses:
+                rgrade = 3; events.append(["override_reading", ""])
+                print(f"  {C['g']}✓ counted{C['0']}  {C['dim']}({shown}){C['0']}")
+            elif not guess or low == "g":
+                rgrade = 1; events.append(["give_up_reading"])
+                print(f"  {C['r']}✗ read as:{C['0']} {shown}")
+            elif norm_reading(guess) in accepted:
+                rgrade = 3 if aided or misses else 4
+                events.append(["reading", guess])
+                print(f"  {C['g']}✓ {shown}{C['0']}")
+            else:
+                misses += 1; events.append(["reading", guess])
+                typed = norm_reading(guess)
+                print(f"  {C['r']}✗ not quite{C['0']}"
+                      + (f"  {C['dim']}({typed}){C['0']}" if typed != guess else ""))
+                if misses == 2 and not aided:
+                    aided = True; events.append(["auto_hint", "h"])
+                    print(f"  {C['y']}starts with:{C['0']} {shown[0]}")
+            if rgrade is None:
+                guess = _read(READ_RETRY)
+
+        answer = meaning(d["text"])
+        mgrade, aided, misses, last_wrong, last_cold = None, False, 0, None, False
+        guess = _read(MEAN_MENU)
+        while mgrade is None:
+            low = guess.lower()
+            if low == "k":
+                aided = True; events.append(["hint", "k"]); show_word_kanji(d, kanji)
+            elif low == "r" and last_wrong:
+                add_accepted(d, last_wrong)
+                mgrade = 4 if last_cold else 3
+                events.append(["override", last_wrong])
+                print(f"  {C['g']}✓ counted -- \"{last_wrong}\" now accepted{C['0']}  "
+                      f"{C['dim']}({answer}){C['0']}")
+            elif not guess or low == "g":
+                mgrade = 1; events.append(["give_up"])
+                print(f"  {C['r']}✗ means:{C['0']} {answer}")
+            elif is_match(guess, answer_text(d["text"])):
+                mgrade = 3 if aided or misses else 4
+                events.append(["guess", guess])
+                print(f"  {C['g']}✓ {answer}{C['0']}")
+            else:
+                last_wrong, last_cold = guess, not aided and not misses
+                misses += 1; events.append(["guess", guess])
+                print(f'  {C["r"]}✗ not quite ("{guess}"){C["0"]}')
+                if misses == 2 and not aided:
+                    aided = True; events.append(["auto_hint", "k"]); show_word_kanji(d, kanji)
+            if mgrade is None:
+                guess = _read(MEAN_RETRY)
+
+        grade = min(rgrade, mgrade)
+        log_attempt(w, events, "correct" if grade > 1 else "gave_up", grade, log=VOCAB_LOG)
+        events = None
+        if grade == 1:
+            print(f"  {word_line(w, d)}")
+            _read(f"{C['dim']}  enter for next{C['0']}  ")
+        return grade
+    except _Quit:
+        if events is not None:
+            log_attempt(w, events, "quit", log=VOCAB_LOG)
+        return None
+
+
+def vocab_session(ctx, args, levels):
+    """Returns the vocabulary state when a session ran (for the progress
+    table), else None."""
+    kanji, vocab = ctx["kanji"], ctx["vocab"]
+    path = os.path.join(VAULT, VOCAB_STATE_FILE)
+    vstate = load_state(path)
+    now = today()
+    due_all = [w for w, c in vstate.items()
+               if c.get("due", 0) <= now and w in vocab and not vocab[w]["known"]
+               and in_levels(vocab, [w], levels)]
+    due_all.sort(key=lambda w: vstate[w].get("due", 0))
+    reserve = max(0, min(args.reserve, args.new, args.max // 2))
+    due = due_all[:args.max - reserve]
+    deferred = len(due_all) - len(due)
+    pool = vocab_order(kanji, vocab, vstate, ctx["state"], levels)
+    fresh = pool[:max(reserve, args.max - len(due))][:args.new]
+
+    if args.plan:
+        print((f"[{args.level}] " if levels else "") + f"{len(due)} words due · {len(fresh)} new queued"
+              + (f" · {deferred} due deferred to a later session" if deferred else ""))
+        for w in fresh[:25]:
+            d = vocab[w]
+            print(f"  {w}  {shown_reading(w, d)}  {C['dim']}{vocab_reason(w, kanji, vocab, ctx['state']):22}"
+                  f"{C['0']} {meaning(d['text'])[:40]}")
+        return None
+    if not due and not fresh:
+        print("no words due. run with --new to pull more.")
+        return None
+    random.shuffle(due)
+    queue = due[:]
+    for j, w in enumerate(fresh):
+        queue.insert(round((j + 1) * len(due) / (len(fresh) + 1)) + j, w)
+
+    graded, tagged = run_queue(ctx, vstate, queue, items=vocab, ask_fn=vocab_ask, study_fn=vocab_study)
+    save_state(vstate, path)
+    remaining = sum(1 for w, d in vocab.items()
+                    if vocab_ok(w, d) and not d["known"] and in_levels(vocab, [w], levels))
+    print(f"\n{C['dim']}{'─' * 52}{C['0']}")
+    print(f"{graded} graded · {tagged} newly tagged known · "
+          f"{remaining} {(args.level + ' ') if levels else ''}words left unknown"
+          + (f" · {deferred} due held back" if deferred else ""))
+    return vstate
+
+
 def parse_levels(spec):
     """'n5-n4', 'n3', 'n3,n2' (Japanese) or '1-3', '2' (Chinese), in the
     vault's own level names; a range runs in either direction."""
@@ -1207,6 +1507,8 @@ def main():
     ap.add_argument("--hard", type=int, nargs="?", const=8, default=None, metavar="N",
                     help=f"re-study and test the N cards missed most ({HARD_LAPSES}+ misses; "
                     "default 8)")
+    ap.add_argument("--vocab", action="store_true",
+                    help="quiz vocabulary (reading, then meaning) instead of characters")
     ap.add_argument("--clusters", action="store_true",
                     help="pick new cards family by family (footholds first, one new "
                     "sibling per family per day) instead of by words unlocked")
@@ -1228,6 +1530,11 @@ def main():
     state = load_state()
     ctx["state"] = state
 
+    if args.vocab:
+        vstate = vocab_session(ctx, args, levels)
+        if vstate is not None:
+            show_progress({w: d for w, d in vocab.items() if vocab_ok(w, d)}, vstate, levels)
+        return
     if args.confusable is not None:
         confusable_session(ctx, state, args.confusable, levels)
     elif args.lookalikes is not None:
@@ -1293,10 +1600,12 @@ def review_session(ctx, state, args, levels):
     return True
 
 
-def run_queue(ctx, state, queue):
+def run_queue(ctx, state, queue, items=None, ask_fn=None, study_fn=None):
     """The review loop: unseen cards get a study card first and are tested a
-    few cards later; a miss comes back once more in the same session."""
-    kanji = ctx["kanji"]
+    few cards later; a miss comes back once more in the same session. Runs
+    characters by default; the vocabulary mode passes its own items/ask/study."""
+    kanji = items if items is not None else ctx["kanji"]
+    ask_fn, study_fn = ask_fn or ask, study_fn or study
     graded = tagged = 0
     requeued, studied = set(), set()
     i = 0
@@ -1304,12 +1613,12 @@ def run_queue(ctx, state, queue):
         k = queue[i]
         i += 1
         if k not in state and k not in studied:
-            if not study(k, kanji[k], ctx, i, len(queue)):
+            if not study_fn(k, kanji[k], ctx, i, len(queue)):
                 break
             studied.add(k)
             queue.insert(min(len(queue), i + random.randint(3, 6)), k)
             continue
-        result = ask(k, kanji[k], ctx, i, len(queue))
+        result = ask_fn(k, kanji[k], ctx, i, len(queue))
         if result is None:
             break
         card = schedule(state.get(k, {"intro": today()}), result)
