@@ -45,6 +45,13 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .stats { display: flex; flex-wrap: wrap; gap: 10px 26px; font-variant-numeric: tabular-nums; }
 .stats div { display: grid; }
 .stats b { font-family: var(--mono); font-weight: 500; font-size: 1.3rem; }
+.prog { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: .85rem; width: 100%; max-width: 520px; }
+.prog th { font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; text-align: right; padding: 0 0 4px 10px; }
+.prog td { font-family: var(--mono); text-align: right; padding: 3px 0 3px 10px; border-top: 1px solid var(--line); }
+.prog th:first-child, .prog td:first-child { text-align: left; padding-left: 0; }
+.prog td.pc { color: var(--muted); }
+.prog tr.dim td { color: var(--muted); opacity: .55; }
+.prog-wrap { overflow-x: auto; }
 .stats span { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .setting { display: grid; gap: 8px; }
 .setting > span { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
@@ -162,6 +169,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
       <div><b id="s-kanji">0</b><span>kanji fully built</span></div>
       <div><b id="s-best">0</b><span>best streak</span></div>
     </div>
+    <div class="prog-wrap"><table class="prog" id="prog"></table><p class="note" id="prog-note"></p></div>
     <div class="setting"><span>levels</span><div class="chips" id="g-level"></div></div>
     <div class="setting"><span>focus</span><div class="chips" id="g-focus"></div><span class="note" id="due-note"></span></div>
     <div class="setting"><span>mode</span><div class="chips" id="g-mode"></div></div>
@@ -996,6 +1004,13 @@ function renderHome() {
   $("s-snd").textContent = `${S.builtSound.size} / ${Object.keys(SND).length}`;
   $("s-snd-box").hidden = !HAS_SOUND;
   $("s-kanji").textContent = S.builtKanji.size;
+  const lv = LEVEL_SETS[S.level];
+  $("prog").innerHTML = (D.progress || []).length ? `<tr><th>level</th><th>known</th><th></th><th>learning</th><th>close</th><th>hard</th><th>new</th></tr>` +
+    D.progress.map(([l, t, kn, st, close, hard]) =>
+      `<tr class="${lv.includes(l) ? "" : "dim"}"><td>${l === "unlisted" ? "unlisted" : l.toUpperCase()}</td><td>${kn}/${t}</td><td class="pc">${Math.floor(100 * kn / t)}%</td>` +
+      `<td>${st}</td><td>${close}</td><td>${hard}</td><td>${t - kn - st}</td></tr>`).join("") : "";
+  $("prog-note").textContent = (D.progress || []).length
+    ? `Your quiz progress as of ${D.generated}. Close: next review 14+ days out. Hard: missed 3+ times.` : "";
   const fk = focusKanji();
   $("due-note").textContent = Object.keys(SRS).length
     ? `${fk.length} due or hard at ${S.level.toUpperCase()} (${fk.filter(isHard).length} hard), from your quiz schedule as of ${D.generated}`

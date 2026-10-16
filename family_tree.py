@@ -94,6 +94,18 @@ if os.path.exists(kdb_path):
 # the quiz's schedule, so the game can aim at what's due: [due date, misses] per kanji in progress
 data["srs"] = {k: [datetime.date.fromordinal(state[k]["due"]).isoformat(), state[k].get("lapses", 0)]
                for k in pool if k in state and not kanji[k]["known"] and state[k].get("due")}
+# the quiz's end-of-session progress table: [level, total, known, learning, close, hard]
+prog = collections.defaultdict(lambda: [0, 0, 0, 0, 0])
+for k, d in kanji.items():
+    r = prog[q.level(d["text"])]
+    r[0] += 1
+    if d["known"]:
+        r[1] += 1
+    elif k in state:
+        r[2] += 1
+        r[3] += state[k].get("ivl", 0) >= 14
+        r[4] += q.is_hard(state[k])
+data["progress"] = [[lvl] + prog[lvl] for lvl in q.P["levels"] if prog[lvl][0]]
 used = {c for k in pool for c in kanji[k]["comps"]}
 data["parts"] = {c: (q.short(kanji[c]["text"]) if c in kanji else
                      ("" if cm.get(c, "").startswith("u+") else cm.get(c, "").split(",")[0].strip()))
