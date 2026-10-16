@@ -52,6 +52,9 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .prog td.pc { color: var(--muted); }
 .prog tr.dim td { color: var(--muted); opacity: .55; }
 .mnem { font-size: .9rem; color: var(--muted); margin: 0; max-width: 52ch; }
+.lglyphs { display: flex; gap: 22px; justify-content: center; font-family: var(--glyph); font-weight: 700; font-size: clamp(3rem, 16vw, 5rem); line-height: 1; }
+.lglyphs span { color: var(--muted); }
+.lglyphs span.on, .lglyphs:not(:has(.on)) span { color: var(--ink); }
 .crow .mn { flex-basis: 100%; font-size: .82rem; color: var(--muted); }
 .typed-row { display: flex; gap: 10px; width: 100%; }
 .wtype { flex: 1; min-width: 0; font: inherit; font-size: 1.15rem; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--sheet); color: var(--ink); }
@@ -78,6 +81,10 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { font-size: .85rem; border: 1px solid var(--line); background: var(--sheet); color: var(--muted); padding: 6px 12px; border-radius: 7px; cursor: pointer; }
 .chip[aria-pressed=true] { background: var(--indigo); border-color: var(--indigo); color: var(--sheet); }
+.plan-box { display: grid; gap: 6px; padding: 14px 16px; border: 1.5px solid var(--indigo); border-radius: 14px; background: var(--sheet); }
+.start.alt { background: none; color: var(--indigo); border: 1.5px solid var(--indigo); }
+.planstrip { font-size: .85rem; color: var(--muted); margin: 0; }
+.planstrip b { color: var(--ink); font-weight: 600; }
 .start { justify-self: start; font-weight: 600; font-size: 1.05rem; background: var(--indigo); color: var(--sheet); border: 0; border-radius: 10px; padding: 12px 26px; cursor: pointer; }
 .map { display: grid; gap: 8px; }
 .map .dots { display: flex; flex-wrap: wrap; gap: 3px; }
@@ -192,7 +199,12 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
     <div class="prog-wrap"><table class="prog" id="prog"></table><table class="prog" id="vprog"></table><p class="note" id="prog-note"></p></div>
     <div class="setting"><span>levels</span><div class="chips" id="g-level"></div></div>
     <div class="setting"><span>focus</span><div class="chips" id="g-focus"></div><span class="note" id="due-note"></span></div>
-    <div class="setting"><span>mode</span><div class="chips" id="g-mode"></div></div>
+    <div class="plan-box">
+      <button class="start" id="plan-start" type="button">Start today's plan</button>
+      <p class="note" id="plan-note"></p>
+    </div>
+    <div class="setting"><span>or choose</span><div class="chips" id="g-mode"></div></div>
+    <div class="setting"><span>more</span><div class="chips" id="g-more"></div></div>
     <div class="setting"><span>meanings</span><div class="chips" id="g-mean"></div></div>
     <details class="guide" id="guide">
       <summary>How to spot the part that gives the sound</summary>
@@ -204,7 +216,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
       </ol>
       <div class="rads" id="rads"></div>
     </details>
-    <button class="start" id="start" type="button">Start</button>
+    <button class="start alt" id="start" type="button">Start this mode</button>
     <div class="map" aria-label="Your tree">
       <div class="setting"><span>your tree</span></div>
       <div class="dots" id="dots"></div>
@@ -253,6 +265,8 @@ const S = {
   wov: store.get("wov", {}),
   day: store.get("day", {}),
   introDay: store.get("introDay", {}),
+  recent: store.get("recent", []),
+  planMix: [],
   wstreak: store.get("wstreak", {}),
   mixups: store.get("mixups", {}),
   best: store.get("best", 0),
@@ -265,7 +279,8 @@ const S = {
 if (!LEVEL_SETS[S.level]) S.level = "n5–n4";
 const SND = D.sound || {};
 const HAS_SOUND = Object.keys(SND).length > 0;
-if (!["new", "families", "cousins", "sounds", "build", "words", "lookalikes"].includes(S.mode) || (S.mode === "sounds" && !HAS_SOUND)) S.mode = "families";
+if (S.mode === "new") S.mode = "build";
+if (!["families", "cousins", "sounds", "build", "words", "lookalikes"].includes(S.mode) || (S.mode === "sounds" && !HAS_SOUND)) S.mode = "families";
 // ---- the schedule: your quiz's cards as of the last sync, plus what you've answered here since,
 // applied with the same rules game_sync.py uses, so progress shows before it reaches the vault
 const SRS = D.srs || {}, VS = D.vsrs || {};
@@ -325,7 +340,8 @@ function countWord(w, ok) {
 const isDue = k => { const c = kCard(k); return !!c && !kKnown(k) && c.due <= todayISO() && S.reviewed[k] !== todayISO(); };
 const isHard = k => { const c = kCard(k); return !!c && !kKnown(k) && c.lapses >= HARD_LAPSES && S.reviewed[k] !== todayISO(); };
 const kStatus = k => kKnown(k) ? "known" : kCard(k) ? (kCard(k).lapses >= HARD_LAPSES ? "hard" : "learning") : "new";
-const inLevel = k => K[k] && LEVEL_SETS[S.level].includes(K[k][1]);
+const curLevels = () => S.planLevels || LEVEL_SETS[S.level];
+const inLevel = k => K[k] && curLevels().includes(K[k][1]);
 function focusKanji() {
   return [...new Set(Object.keys(SRS).concat(Object.keys(S.ov)))].filter(k => inLevel(k) && (isDue(k) || isHard(k)))
     .sort((a, b) => isHard(b) - isHard(a) || kCard(a).due.localeCompare(kCard(b).due));
@@ -398,7 +414,7 @@ const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = rnd(i 
 
 // ---- choosing a round
 function tilesOf(f) {
-  const lv = LEVEL_SETS[S.level];
+  const lv = curLevels();
   const ks = famMembers(f).filter(k => k !== f && K[k] && lv.includes(K[k][1]));
   if (!focusing()) return ks;
   const fk = new Set(focusKanji());
@@ -514,8 +530,8 @@ function renderBar() {
 }
 
 function startRound() {
+  if (S.inPlan) return planNext();
   if (S.mode === "build") return startBuild();
-  if (S.mode === "new") return startNew();
   if (S.mode === "words") return startWords();
   if (S.mode === "lookalikes") return startLookalikes();
   const { fams, parent } = pickFamilies();
@@ -621,6 +637,7 @@ function answerMeaning(i) {
   const fresh = !!R.tiles[R.i].fresh;
   record({ step: "meaning", k, status: K[k][2], picked: other, ok, options: R.opts.map(o => o.k), due: !!isDue(k), ...(fresh ? { fresh } : {}) });
   countKanji(k, ok, fresh);
+  pushRecent(ok);
   if (!ok) addMixup(k, other);
   if (ok) {
     S.streak++; bumpBest();
@@ -741,18 +758,29 @@ function buildReading(k) {
   for (const f of Object.keys(SND)) if (SND[f].a[k]) return SND[f].a[k];
   return K[k][4][0];
 }
+// new kanji a day: about 12, fewer when reviews pile up or recent answers slip (a teacher's pacing)
+function newBudget() {
+  const backlog = Object.keys(K).filter(isDue).length;
+  const recent = S.recent.slice(-40), acc = recent.length >= 10 ? recent.filter(Boolean).length / recent.length : 1;
+  let n = backlog > 40 ? 4 : backlog > 20 ? 8 : 12;
+  if (acc < .8) n = Math.floor(n / 2);
+  return n;
+}
+const newLeft = () => Math.max(0, newBudget() - dayLog().started);
+function pushRecent(ok) { S.recent.push(!!ok); S.recent = S.recent.slice(-60); store.set("recent", S.recent); }
+// due kanji first; a round with room left takes new kanji too (studied, then built from memory)
 function pickBuildKanji() {
-  S.fellBack = S.focus === "due";
-  if (focusing()) {
-    const fk = focusKanji().filter(k => (K[k][3] || []).length >= 2);
-    if (fk.length) { S.fellBack = false; return fk.slice(0, 5); }
+  S.fellBack = false;
+  if (S.focus === "due") {
+    const due = focusKanji().filter(k => (K[k][3] || []).length >= 2).slice(0, 5);
+    const fresh = pickNewKanji(Math.min(5 - due.length, newLeft(), 4));
+    if (due.length || fresh.length) return { due, fresh };
+    S.fellBack = true;
   }
-  const lv = LEVEL_SETS[S.level];
-  const cands = Object.keys(K).filter(k => lv.includes(K[k][1]) && (K[k][3] || []).length >= 2);
-  const fresh = cands.filter(k => !S.builtKanji.has(k));
-  const pool = fresh.length >= 5 ? fresh : cands;
-  // mostly kanji you know or are learning (you can build what you've met), a few new ones
-  return shuffle(pool.slice()).sort((a, b) => (kStatus(a) === "new") - (kStatus(b) === "new") + (Math.random() - .5) * 1.4).slice(0, 5);
+  const lv = curLevels();
+  const cands = Object.keys(K).filter(k => lv.includes(K[k][1]) && (K[k][3] || []).length >= 2 && kStatus(k) !== "new");
+  const unbuilt = cands.filter(k => !S.builtKanji.has(k));
+  return { due: shuffle((unbuilt.length >= 5 ? unbuilt : cands).slice()).slice(0, 5), fresh: [] };
 }
 // ======================= New kanji: studied, then built from memory a few kanji later; that first test starts it
 // families you already have a foothold in first, at most one new kanji per family a day (as the quiz's --clusters)
@@ -762,32 +790,15 @@ function newCandidates() {
     .map(k => [S.introDay[famOf[k] || k] === todayISO() ? 1 : 0, -foothold(k), anchorOf(k) && wKnown(anchorOf(k)) ? 0 : 1, Math.random(), k])
     .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]).map(x => x[4]);
 }
-function pickNewKanji() {
+function pickNewKanji(n) {
   const out = [], fams = new Set();
   for (const k of newCandidates()) {
     const f = famOf[k] || k;
     if (fams.has(f)) continue;
     out.push(k); fams.add(f);
-    if (out.length === 4) break;
+    if (out.length >= n) break;
   }
-  return out;
-}
-function startNew() {
-  show("play");
-  const ks = pickNewKanji();
-  if (!ks.length) {
-    S.phase = null;
-    card(`<p class="verdict">Every kanji at this level is started. Pick another level, or review in the other modes.</p>
-      <button class="next" type="button" id="home-btn" data-focus>Back</button>`);
-    $("home-btn").addEventListener("click", goHome);
-    return;
-  }
-  // study 1, 2, 3, then each test comes after the next study: s1 s2 s3 t1 s4 t2 t3 t4
-  const study = ks.map(k => ({ k, f: famOf[k], study: true })), test = ks.map(k => ({ k, f: famOf[k], fresh: true }));
-  const tiles = study.slice(0, 3);
-  test.forEach((t, i) => { tiles.push(t); if (study[i + 3]) tiles.push(study[i + 3]); });
-  S.round = { build: true, isNew: true, fams: [], parent: null, tiles, i: 0, si: 0, results: [], missedFams: new Set(), notice: "" };
-  buildTileStart();
+  return n > 0 ? out : [];
 }
 function newStudy(k) {
   const R = S.round, w = anchorOf(k), f = soundFamilyOf(k);
@@ -816,17 +827,24 @@ function continueNewStudy() {
   R.i < R.tiles.length ? buildTileStart() : endBuild();
 }
 
-function startBuild() {
+function startBuild(pick) {
   show("play");
-  const ks = pickBuildKanji();
-  if (!ks.length) {
+  const { due, fresh } = pick || pickBuildKanji();
+  if (!due.length && !fresh.length) {
     S.phase = null;
     card(`<p class="verdict">Nothing to build at this level.</p><button class="next" type="button" id="home-btn" data-focus>Back</button>`);
     $("home-btn").addEventListener("click", goHome);
     return;
   }
-  S.round = { build: true, fams: [], parent: null, tiles: ks.map(k => ({ k, f: famOf[k] })), i: 0, si: 0,
-              results: [], missedFams: new Set(), notice: S.fellBack ? "nothing due here: everything" : "" };
+  // each new kanji: its study card, then its test three kanji later
+  const tiles = due.map(k => ({ k, f: famOf[k] }));
+  fresh.forEach((k, j) => {
+    const at = Math.min(tiles.length, j * 2);
+    tiles.splice(at, 0, { k, f: famOf[k], study: true });
+    tiles.splice(Math.min(tiles.length, at + 3), 0, { k, f: famOf[k], fresh: true });
+  });
+  S.round = { build: true, isNew: fresh.length > 0, fams: [], parent: null, tiles, i: 0, si: 0,
+              results: [], missedFams: new Set(), notice: S.fellBack ? "nothing due here: practice" : "" };
   buildTileStart();
 }
 function buildTileStart() {
@@ -1097,6 +1115,7 @@ function endBuild() {
       <button class="ghost" type="button" id="home-btn">Back to start</button>
     </div>
     <p class="sub">Enter for the next round</p>`);
+  planButton();
   $("again").addEventListener("click", startRound);
   $("home-btn").addEventListener("click", goHome);
 }
@@ -1105,7 +1124,7 @@ function endBuild() {
 const W = D.words || {}, KUN = D.kun || {};
 const HAS_WORDS = Object.keys(W).length > 0;
 const wKanji = w => W[w][5].filter(u => K[u[0]]).map(u => u[0]);
-const wInLevel = w => LEVEL_SETS[S.level].includes(W[w][3]);
+const wInLevel = w => curLevels().includes(W[w][3]);
 const wKnown = w => W[w][4] || !!(S.wov[w] && S.wov[w].known);
 const wStarted = w => wCard(w) || S.wseen[w];
 // a word only seen (an anchor shown in Build) is due the next day
@@ -1146,9 +1165,9 @@ function pickWords() {
   return pick.concat(due.slice(nDue, nDue + 6 - pick.length));
 }
 
-function startWords() {
+function startWords(list) {
   show("play");
-  const ws = pickWords();
+  const ws = list || pickWords();
   if (!ws.length) {
     S.phase = null;
     card(`<p class="verdict">No words to practise at this level.</p><button class="next" type="button" id="home-btn" data-focus>Back</button>`);
@@ -1421,6 +1440,7 @@ function endWords() {
       <button class="ghost" type="button" id="home-btn">Back to start</button>
     </div>
     <p class="sub">Enter for the next round</p>`);
+  planButton();
   $("again").addEventListener("click", startRound);
   $("home-btn").addEventListener("click", goHome);
 }
@@ -1431,6 +1451,7 @@ function endWords() {
 const LOOKS = D.looks || {};
 function addMixup(k, other) {
   if (!K[other] || other === k) return;
+  if (S.inPlan) S.planMix.push(k);
   for (const [a, b] of [[k, other], [other, k]]) {
     const l = S.mixups[a] = S.mixups[a] || [];
     if (!l.includes(b) && !(LOOKS[a] || []).includes(b)) l.push(b);
@@ -1459,9 +1480,9 @@ function lookGroups() {
   return groups;
 }
 
-function startLookalikes() {
+function startLookalikes(given) {
   show("play");
-  const groups = lookGroups();
+  const groups = given || lookGroups();
   if (!groups.length) {
     S.phase = null;
     card(`<p class="verdict">No lookalikes at this level yet. They're added from the kanji you mix up in the other modes.</p>
@@ -1471,6 +1492,10 @@ function startLookalikes() {
   }
   const tiles = [];
   groups.forEach((g, gi) => {
+    // spot what they share, then what each one adds, then see them side by side
+    const { shared, diff } = groupParts(g);
+    if (shared.length) tiles.push({ kind: "shared", g, gi });
+    for (const k of g) if (diff[k].length) tiles.push({ kind: "diff", k, g, gi });
     tiles.push({ kind: "compare", g, gi });
     shuffle(g.slice()).forEach(k => tiles.push({ kind: "type", k, g, gi }));
     shuffle(g.slice()).forEach(k => tiles.push({ kind: "rev", k, g, gi }));
@@ -1479,9 +1504,82 @@ function startLookalikes() {
               notice: S.fellBack ? "nothing due here: other lookalikes" : "" };
   lookTile();
 }
+// parts all the way down (等 = 竹 + 寺, and 寺 = 土 + 寸), so 寺 counts as shared by 寺 and 等
+// a basic kanji like 未 lists itself as its only part
+const ownParts = x => ((K[x] && K[x][3]) || []).filter(c => c !== x);
+function deepParts(x, depth = 0) {
+  const out = new Set();
+  for (const c of ownParts(x)) {
+    out.add(c);
+    if (depth < 3 && K[c] && c !== x) deepParts(c, depth + 1).forEach(y => out.add(y));
+  }
+  return out;
+}
+function groupParts(g) {
+  const P = g.map(x => new Set([x, ...deepParts(x)]));
+  const common = [...P[0]].filter(c => P.every(p => p.has(c)));
+  // keep the biggest shared piece: 寺, not also its 土 and 寸
+  const shared = common.filter(c => !common.some(o => o !== c && deepParts(o).has(c)));
+  const diff = {};
+  for (const x of g) diff[x] = ownParts(x).filter(c => !common.includes(c));
+  return { shared, diff };
+}
+function lookPickOptions(g, right) {
+  const pool = new Set(right);
+  for (const x of g) for (const c of ownParts(x)) pool.add(c);
+  groupParts(g).shared.forEach(c => pool.add(c));
+  const decoys = shuffle(ALL_PARTS.filter(c => !pool.has(c) && !g.includes(c))).slice(0, Math.max(2, 7 - pool.size));
+  return shuffle([...pool].filter(c => !g.includes(c) || right.includes(c)).concat(decoys)).slice(0, 9);
+}
+function lookPick(t) {
+  const R = S.round, { shared, diff } = groupParts(t.g);
+  R.right = t.kind === "shared" ? shared : diff[t.k];
+  R.opts = lookPickOptions(t.g, R.right); R.sel = new Set();
+  if (!R.right.every(c => R.opts.includes(c))) R.opts = shuffle(R.opts.slice(0, 9 - R.right.length).concat(R.right.filter(c => !R.opts.includes(c))));
+  S.phase = "lpick"; S.locked = false;
+  const others = t.g.filter(x => x !== t.k);
+  card(`
+    <p class="q">${t.kind === "shared" ? "what do they share?" : `what does ${t.k} have that ${others.join(" ")} ${others.length > 1 ? "don't" : "doesn't"}?`}
+      <span style="text-transform:none;letter-spacing:0">(pick all of them)</span></p>
+    <div class="lglyphs">${t.g.map(x => `<span class="${t.kind === "diff" && x === t.k ? "on" : ""}">${x}</span>`).join("")}</div>
+    <div class="pgrid" role="group" aria-label="Parts">
+      ${R.opts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${c}</span><span class="pm">${D.parts[c] || (K[c] ? K[c][0] : "")}</span></button>`).join("")}
+    </div>
+    <button class="next" type="button" id="check-parts">Check</button>
+    <p class="sub">tap or press 1–${R.opts.length}, then Enter</p>`);
+  document.querySelectorAll(".ptile").forEach(b => b.addEventListener("click", () => toggleLookPart(+b.dataset.i)));
+  $("check-parts").addEventListener("click", checkLookPick);
+}
+function toggleLookPart(i) {
+  const R = S.round;
+  if (S.phase !== "lpick" || S.locked || i >= R.opts.length) return;
+  R.sel.has(i) ? R.sel.delete(i) : R.sel.add(i);
+  const b = document.querySelector(`.ptile[data-i="${i}"]`);
+  if (b) b.setAttribute("aria-pressed", R.sel.has(i));
+}
+function checkLookPick() {
+  const R = S.round, t = R.tiles[R.i];
+  if (S.phase !== "lpick" || S.locked) return;
+  S.locked = true;
+  const picked = [...R.sel].map(i => R.opts[i]);
+  const ok = picked.length === R.right.length && R.right.every(c => picked.includes(c));
+  record({ step: t.kind === "shared" ? "look_shared" : "look_diff", k: t.k || null, group: t.g, right: R.right, picked, ok });
+  if (ok) { S.streak++; bumpBest(); } else { S.streak = 0; t.missed = true; }
+  const what = t.kind === "shared"
+    ? `They share ${R.right.map(c => `<span class="g">${c}</span>`).join(" + ")}`
+    : `<span class="g">${t.k}</span> adds ${R.right.map(c => `<span class="g">${c}</span> ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}`;
+  S.phase = "review";
+  card(`
+    <p class="verdict">${ok ? "✓" : `<span class="no">✗</span>`} ${what}.${ok ? "" : ` You picked ${picked.map(c => `<span class="g">${c}</span>`).join(" ") || "nothing"}.`}</p>
+    ${groupHTML(t.g, t.kind === "diff" ? t.k : null)}
+    <button class="next" type="button" id="cont" data-focus>Continue</button>`);
+  S.afterReview = lookAdvance;
+  $("cont").addEventListener("click", continueReview);
+}
 function lookTile() {
   const R = S.round, t = R.tiles[R.i];
   renderBar();
+  if (t.kind === "shared" || t.kind === "diff") return lookPick(t);
   if (t.kind === "compare") return lookCompare(t.g);
   if (t.kind === "type") return lookType(t);
   return lookRev(t);
@@ -1498,9 +1596,15 @@ function groupHTML(g, mark) {
 }
 function lookCompare(g) {
   S.phase = "lcompare";
+  const { shared, diff } = groupParts(g);
+  const inside = g.filter(x => !diff[x].length);
+  const note = inside.length === g.length
+    ? (shared.length ? "Same parts: the difference is in how they're drawn. Look at the stroke lengths and positions."
+                     : "These don't break into smaller parts: the difference is in the strokes themselves. Look at their lengths and positions.")
+    : inside.map(x => `${x} is ${g.filter(y => y !== x).join(" / ")} without ${g.filter(y => y !== x).map(y => diff[y].join("")).join(" / ")}.`).join(" ");
   card(`
-    <p class="q">these look alike</p>
-    <p class="hint">Find the part that tells them apart; you'll be asked each one's meaning next.</p>
+    <p class="q">side by side</p>
+    <p class="hint">${note || "Each one's meaning comes next: the outlined part is your clue."}</p>
     ${groupHTML(g)}
     <button class="next" type="button" id="cont" data-focus>Got it</button>
     <p class="sub">or press Enter</p>`);
@@ -1534,6 +1638,7 @@ function checkLook() {
   const done = () => {
     record({ step: "meaning", k, status: K[k][2], picked: other || null, guess, typed: true, ok: res.ok, due: !!isDue(k) });
     countKanji(k, res.ok, false);
+    pushRecent(res.ok);
     if (!res.ok) t.missed = true;
     lookAdvance();
   };
@@ -1599,8 +1704,8 @@ function answerLookRev(i) {
 function lookAdvance() {
   const R = S.round, t = R.tiles[R.i];
   if (S.phase === "lcompare") S.phase = null;
-  // a miss is asked again at the end of its group, once
-  if (t.missed && !t.retry) {
+  // a miss is asked again at the end of its group, once (the part-spotting steps are not repeated)
+  if (t.missed && !t.retry && (t.kind === "type" || t.kind === "rev")) {
     let end = R.i + 1;
     while (end < R.tiles.length && R.tiles[end].gi === t.gi) end++;
     R.tiles.splice(end, 0, { ...t, missed: false, retry: true });
@@ -1629,6 +1734,7 @@ function endLookalikes() {
       <button class="ghost" type="button" id="home-btn">Back to start</button>
     </div>
     <p class="sub">Enter for the next round</p>`);
+  planButton();
   $("again").addEventListener("click", startRound);
   $("home-btn").addEventListener("click", goHome);
 }
@@ -1736,12 +1842,85 @@ function endRound() {
       <button class="ghost" type="button" id="home-btn">Back to start</button>
     </div>
     <p class="sub">Enter for the next round</p>`);
+  planButton();
   $("again").addEventListener("click", startRound);
   $("home-btn").addEventListener("click", goHome);
 }
 
+// ======================= today's plan: reviews on time, contrast right after a mix-up, anchor words, then new kanji
+const targetLevel = () => LV.find(l => Object.keys(K).some(k => K[k][1] === l && kStatus(k) === "new")) || LV[LV.length - 1];
+function planDecide() {
+  const mix = [...new Set(S.planMix)].filter(k => lookLinks(k).length);
+  if (mix.length) return { label: `Lookalikes: ${mix.map(k => k + lookLinks(k)[0]).join(" ")}`, run: () => {
+    S.planMix = [];
+    const groups = [], used = new Set();
+    for (const k of mix) {
+      if (used.has(k) || groups.length === 2) continue;
+      const g = [k, ...lookLinks(k).filter(x => !used.has(x))].slice(0, 4);
+      if (g.length > 1) { groups.push(g); g.forEach(x => used.add(x)); }
+    }
+    S.mode = "lookalikes"; S.planLevels = LV; startLookalikes(groups);
+  } };
+  S.planLevels = LV;
+  const due = focusKanji().filter(k => (K[k][3] || []).length >= 2);
+  if (due.length) return { label: `Review: ${Math.min(5, due.length)} of ${due.length} due kanji`, run: () => {
+    S.mode = "build"; S.planLevels = LV; startBuild({ due: focusKanji().filter(k => (K[k][3] || []).length >= 2).slice(0, 5), fresh: [] });
+  } };
+  const dw = HAS_WORDS ? dueWords() : [];
+  if (dw.length) return { label: `Anchor words: ${Math.min(6, dw.length)} of ${dw.length} due`, run: () => {
+    S.mode = "words"; S.planLevels = LV; startWords(dueWords().slice(0, 6));
+  } };
+  const lvl = targetLevel();
+  S.planLevels = [lvl];
+  const n = Math.min(4, newLeft()), fresh = pickNewKanji(n);
+  S.planLevels = null;
+  if (fresh.length) return { label: `New kanji: ${fresh.length} at ${lvl.toUpperCase()} (${newLeft()} left today)`, run: () => {
+    S.mode = "build"; S.planLevels = [lvl]; startBuild({ due: [], fresh: pickNewKanji(n) });
+  } };
+  return { label: "Done for today", run: planDone };
+}
+function planNext() {
+  S.planLevels = null;
+  planDecide().run();
+}
+function planStrip() {
+  const d = dayLog();
+  return `<p class="planstrip">Today: <b>${d.reviews}</b> reviews · <b>${d.started}</b> of ${newBudget()} new kanji · <b>${d.words}</b> word answers` +
+    (d.misses ? ` · ${d.misses} misses` : "") + `</p>`;
+}
+function planDone() {
+  S.mode = "build"; S.planLevels = null;
+  show("play");
+  S.phase = "plandone";
+  const tomorrow = addDays(1), d = dayLog();
+  const dueTomorrow = [...new Set(Object.keys(SRS).concat(Object.keys(S.ov)))].filter(k => !kKnown(k) && kCard(k) && kCard(k).due <= tomorrow).length;
+  card(`
+    <p class="q">today's plan</p>
+    <p class="verdict">Done for today: ${d.reviews} reviews, ${d.started} new kanji, ${d.words} word answers.</p>
+    ${planStrip()}
+    <p class="hint">${dueTomorrow} kanji are due by tomorrow. Stopping here is fine: spacing is what makes it last.
+      ${newLeft() === 0 && newCandidates().length ? "New kanji are paused for today so your reviews keep up." : ""}</p>
+    <div class="row">
+      <button class="next" type="button" id="home-btn" data-focus>Back to start</button>
+      <button class="ghost" type="button" id="more-btn">Keep going: lookalikes of your hard kanji</button>
+    </div>`);
+  $("home-btn").addEventListener("click", goHome);
+  $("more-btn").addEventListener("click", () => { S.inPlan = false; S.mode = "lookalikes"; startLookalikes(); });
+}
+// end-of-round screens: inside the plan, the button names the next block
+function planButton() {
+  if (!S.inPlan) return;
+  const b = $("again"), next = planDecide();
+  S.planLevels = null;
+  if (b) b.textContent = next.label === "Done for today" ? "Finish" : `Next: ${next.label}`;
+  const c = document.querySelector("#card .step");
+  if (c && c.insertAdjacentHTML) c.insertAdjacentHTML("beforeend", planStrip());
+}
+
 function goHome() {
   S.phase = null; S.round = null;
+  S.inPlan = false; S.planLevels = null; S.planMix = [];
+  S.mode = store.get("mode", "build"); if (S.mode === "new") S.mode = "build";
   show("home");
   renderHome();
   $("start").focus();
@@ -1759,7 +1938,7 @@ function tally(items, level, card, known) {
   return rows;
 }
 function progressTable(label, live, base, extra) {
-  const lv = LEVEL_SETS[S.level];
+  const lv = curLevels();
   const cell = (n, b) => `${n}${n !== b ? `<span class="delta${n < b ? " down" : ""}">${n > b ? "+" : ""}${n - b}</span>` : ""}`;
   const levels = Object.keys(live).filter(l => LV.includes(l)).sort((a, b) => LV.indexOf(a) - LV.indexOf(b));
   return `<tr><th>${label}</th><th>known</th><th></th><th>learning</th><th>close</th><th>hard</th><th>new</th></tr>` +
@@ -1793,10 +1972,12 @@ function renderHome() {
   $("s-snd-box").hidden = !HAS_SOUND;
   $("s-kanji").textContent = S.builtKanji.size;
   renderProgress();
+  const next = planDecide(); S.planLevels = null;
+  $("plan-note").textContent = `Chooses the next exercise for you: due reviews first, lookalikes right after a mix-up, your anchor words, then new kanji (${newLeft()} left today at ${targetLevel().toUpperCase()}). Next: ${next.label}.`;
   const fk = focusKanji();
-  if (S.mode === "new") {
-    const n = newCandidates().length;
-    $("due-note").textContent = `${n} kanji not started at ${S.level.toUpperCase()}. Each is studied, then built from memory: that first test starts its schedule. Families you already know kanji in come first.`;
+  if (S.mode === "build") {
+    $("due-note").textContent = `${fk.length} due or hard at ${S.level.toUpperCase()} (${fk.filter(isHard).length} hard); ` +
+      `${Math.min(newLeft(), newCandidates().length)} new kanji left today. Build rounds take due kanji first, then new ones: studied, then built from memory.`;
   } else if (S.mode === "lookalikes") {
     const n = Object.keys(K).filter(k => inLevel(k) && lookLinks(k).length).length;
     $("due-note").textContent = `${n} kanji at ${S.level.toUpperCase()} with lookalikes, from your misses` +
@@ -1826,21 +2007,30 @@ function chipGroup(id, options, current, onPick) {
 
 chipGroup("g-level", Object.keys(LEVEL_SETS).map(l => [l, l.toUpperCase()]), S.level, v => { S.level = v; store.set("level", v); renderHome(); });
 chipGroup("g-focus", [["due", "Due & hard"], ["all", "Everything"]], S.focus, v => { S.focus = v; store.set("focus", v); renderHome(); });
-chipGroup("g-mode", [["new", "New kanji"], ["families", "Families"], ["cousins", "Cousins (harder)"]].concat(HAS_SOUND ? [["sounds", "Sounds (readings)"]] : [], [["build", "Build (whole kanji)"]], HAS_WORDS ? [["words", "Words (readings)"]] : [], [["lookalikes", "Lookalikes"]]),
-  S.mode, v => { S.mode = v; store.set("mode", v); renderHome(); });
+const pickMode = v => {
+  S.mode = v; store.set("mode", v);
+  document.querySelectorAll("#g-mode .chip, #g-more .chip").forEach(c => c.setAttribute("aria-pressed", c.dataset.v === v));
+  renderHome();
+};
+chipGroup("g-mode", [["build", "Build (new + review)"], ["lookalikes", "Lookalikes"]].concat(HAS_WORDS ? [["words", "Words"]] : []), S.mode, pickMode);
+chipGroup("g-more", [["families", "Families"], ["cousins", "Cousins"]].concat(HAS_SOUND ? [["sounds", "Sounds"]] : []), S.mode, pickMode);
 chipGroup("g-mean", [["true", "On"], ["false", "Off"]], S.meanings, v => { S.meanings = v === "true"; store.set("meanings", S.meanings); });
 $("start").addEventListener("click", startRound);
+$("plan-start").addEventListener("click", () => { S.inPlan = true; planNext(); });
 $("quit").addEventListener("click", goHome);
 
 document.addEventListener("keydown", e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (S.phase === "wtype" || S.phase === "ltype") { if (e.key === "Escape") goHome(); return; }
   if (S.phase === "nstudy" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueNewStudy(); return; }
+  if (S.phase === "lpick" && /^[1-9]$/.test(e.key)) { e.preventDefault(); toggleLookPart(+e.key - 1); return; }
+  if (S.phase === "lpick" && e.key === "Enter") { e.preventDefault(); checkLookPick(); return; }
   if (S.phase === "lcompare" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); lookAdvance(); return; }
   if (S.phase === "lrev" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerLookRev(+e.key - 1); return; }
   if (S.phase === "review" && e.key === "r" && S.overrule) { e.preventDefault(); S.overrule(); return; }
   if (S.phase === "review" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueReview(); return; }
   // a quick second Enter from the last feedback screen shouldn't skip past the summary
+  if (S.phase === "plandone" && e.key === "Enter") { e.preventDefault(); goHome(); return; }
   if (S.phase === "summary" && e.key === "Enter") { e.preventDefault(); if (Date.now() - S.summaryAt > 500) startRound(); return; }
   if (S.phase === "lesson" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueLesson(); return; }
   if (S.phase === "wstudy" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); wordAdvance(); return; }
@@ -1862,7 +2052,7 @@ document.addEventListener("keydown", e => {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerReading(+e.key - 1); }
   } else if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy"].includes(S.phase)) {
+  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });
