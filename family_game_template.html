@@ -264,18 +264,20 @@ function answer(f) {
   const rb = document.querySelector(`.basket[data-f="${right}"]`);
   rb.querySelector(".placed").insertAdjacentHTML("beforeend", `<i class="${ok ? "" : "miss"}">${k}</i>`);
   const fb = document.getElementById("fb");
+  // the meaning is asked next for kanji you know or are learning, so don't give it away here
+  const ask = S.meanings && st !== "new";
+  const told = ask ? "" : ` ${gloss}`;
   if (ok) {
     S.streak++; S.score += 10 * Math.min(S.streak, 5);
     b.classList.add("right");
-    fb.innerHTML = `<span class="ok">✓</span> <span class="g">${k}</span> ${gloss}`;
+    fb.innerHTML = `<span class="ok">✓</span> <span class="g">${k}</span>${told}`;
   } else {
     S.streak = 0; R.missedFams.add(right);
     b.classList.add("wrong"); rb.classList.add("answer");
-    fb.innerHTML = `<span class="no">✗</span> <span class="g">${k}</span> ${gloss}: built on <span class="g">${right}</span>${F[right].m ? " " + F[right].m : ""}, not <span class="g">${f}</span>`;
+    fb.innerHTML = `<span class="no">✗</span> <span class="g">${k}</span>${told ? told + ":" : ""} built on <span class="g">${right}</span>${F[right].m ? " " + F[right].m : ""}, not <span class="g">${f}</span>`;
   }
   if (S.streak > S.best) { S.best = S.streak; store.set("best", S.best); }
   renderScore();
-  const ask = S.meanings && st !== "new";
   setTimeout(() => {
     b.classList.remove("right", "wrong"); rb.classList.remove("answer");
     ask ? showMeaningStep() : advance();
