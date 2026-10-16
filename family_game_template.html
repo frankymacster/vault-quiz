@@ -98,6 +98,11 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .part { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 8px; border-radius: 7px; border: 1.5px solid var(--line); background: var(--paper); font-size: .8rem; color: var(--muted); }
 .part .pg { font-family: var(--glyph); font-size: 1.25rem; color: var(--ink); }
 .part.same { opacity: .5; }
+.part .role { font-size: .64rem; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.part.snd { border-color: var(--indigo); }
+.part.snd .role { color: var(--indigo); font-weight: 600; }
+.members { font-family: var(--glyph); font-size: 1.05rem; letter-spacing: .02em; }
+.members rt, .members small { font-family: var(--ui); font-size: .72rem; color: var(--muted); margin-right: 8px; }
 .crow.right .part.diff { border-color: var(--good); color: var(--good); font-weight: 600; }
 .crow.picked .part.diff { border-color: var(--bad); color: var(--bad); font-weight: 600; }
 .next { font-weight: 600; background: var(--indigo); color: var(--sheet); border: 0; border-radius: 10px; padding: 10px 22px; cursor: pointer; }
@@ -123,10 +128,11 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
   <section class="home" id="home">
     <div>
       <h1><span class="jp">家系</span>Kanji Family Builder</h1>
-      <p class="lede">Put each kanji back into its family by finding the part it's built on, then say what it means. One question at a time.</p>
+      <p class="lede">Put each kanji back into its family by finding the part it's built on, then say what it means. In Sounds mode, find the part that gives its reading, then pick the reading. One question at a time.</p>
     </div>
     <div class="stats">
       <div><b id="s-built">0</b><span>families rebuilt</span></div>
+      <div id="s-snd-box"><b id="s-snd">0</b><span>sound families rebuilt</span></div>
       <div><b id="s-best">0</b><span>best streak</span></div>
     </div>
     <div class="setting"><span>levels</span><div class="chips" id="g-level"></div></div>
@@ -171,6 +177,7 @@ const S = {
   mode: store.get("mode", "families"),
   meanings: store.get("meanings", true),
   built: new Set(store.get("built", [])),
+  builtSound: new Set(store.get("builtSound", [])),
   best: store.get("best", 0),
   streak: 0,
   round: null,
@@ -179,7 +186,15 @@ const S = {
   locked: false,
 };
 if (!LEVEL_SETS[S.level]) S.level = "n5–n4";
-if (!["families", "cousins"].includes(S.mode)) S.mode = "families";
+const SND = D.sound || {};
+const HAS_SOUND = Object.keys(SND).length > 0;
+if (!["families", "cousins", "sounds"].includes(S.mode) || (S.mode === "sounds" && !HAS_SOUND)) S.mode = "families";
+const isSound = () => S.mode === "sounds";
+const famMembers = f => isSound() ? SND[f].k : F[f].k;
+const famLabel = f => isSound() ? SND[f].r : (F[f].m || "");
+const reading = (k, f) => SND[f].a[k];
+const unvoice = s => s.replace(/[がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ]/g,
+  c => "かきくけこさしすせそたちつてとはひふへほはひふへほ"["がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ".indexOf(c)]);
 
 // ---- results kept for analysis: every answer, one document per visit, written once per round,
 // owner-only (declared rules). Absent db (outside claude.ai, signed out) = this browser only.
@@ -198,6 +213,7 @@ const dbReady = (window.claude && window.claude.use ? window.claude.use("db") : 
       if (!snap.exists) return;
       const p = snap.data();
       (p.built || []).forEach(f => S.built.add(f));
+      (p.builtSound || []).forEach(f => S.builtSound.add(f));
       if ((p.best || 0) > S.best) S.best = p.best;
       store.set("built", [...S.built]); store.set("best", S.best);
       renderHome();
@@ -216,7 +232,7 @@ function flushResults() {
   const db = results.db;
   if (!db) return;
   const body = { started: results.started, updated: new Date().toISOString(), events: results.events.slice() };
-  const progress = { built: [...S.built], best: S.best, updated: body.updated };
+  const progress = { built: [...S.built], builtSound: [...S.builtSound], best: S.best, updated: body.updated };
   const docId = results.id + (results.part ? "-" + results.part : "");
   // a very long visit moves on to a fresh document once this one is saved (documents cap at 256 KiB)
   if (results.events.length > 1500) { results.part++; results.events = []; }
@@ -235,13 +251,30 @@ const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = rnd(i 
 // ---- choosing a round
 function tilesOf(f) {
   const lv = LEVEL_SETS[S.level];
-  return F[f].k.filter(k => k !== f && lv.includes(K[k][1]));
+  return famMembers(f).filter(k => k !== f && K[k] && lv.includes(K[k][1]));
 }
 function familiarity(f) {
   const ts = F[f].k;
   return ts.filter(k => K[k][2] !== "new").length / ts.length;
 }
+// sound families with different sounds, so the reading step never offers two right answers
+function pickSoundFamilies() {
+  const ok = shuffle(Object.keys(SND).filter(f => tilesOf(f).length >= 1));
+  const fresh = ok.filter(f => !S.builtSound.has(f));
+  const pool = fresh.length >= 3 ? fresh : ok;
+  const out = [], keys = new Set(), seen = new Set();
+  for (const f of pool) {
+    const key = unvoice(SND[f].r);
+    if (keys.has(key) || SND[f].k.some(k => seen.has(k))) continue;
+    out.push(f); keys.add(key); SND[f].k.forEach(k => seen.add(k));
+    const n = out.reduce((s, g) => s + Math.min(tilesOf(g).length, 5), 0);
+    if (out.length === 4 || (out.length === 3 && n >= 6)) break;
+  }
+  return { fams: out, parent: null };
+}
+
 function pickFamilies() {
+  if (isSound()) return pickSoundFamilies();
   const ok = Object.keys(F).filter(f => tilesOf(f).length >= 1);
   const fresh = ok.filter(f => !S.built.has(f));
   const pool = fresh.length >= 3 ? fresh : ok;
@@ -323,12 +356,16 @@ function familyStep() {
   const [gloss, lv, st] = K[k];
   S.phase = "family"; S.locked = false;
   renderBar();
+  const hint = isSound() ? `${gloss} · find the part that gives its sound`
+    : st === "new" ? `new to you: ${gloss}`
+    : R.parent ? `cousins under ${R.parent}${F[R.parent].m ? " (" + F[R.parent].m + ")" : ""}: find the part that differs`
+    : lv.toUpperCase();
   card(`
-    <p class="q">which family is it built on?</p>
+    <p class="q">${isSound() ? "which part gives its sound?" : "which family is it built on?"}</p>
     <div class="glyph">${k}</div>
-    <p class="hint">${st === "new" ? `new to you: ${gloss}` : R.parent ? `cousins under ${R.parent}${F[R.parent].m ? " (" + F[R.parent].m + ")" : ""}: find the part that differs` : lv.toUpperCase()}</p>
+    <p class="hint">${hint}</p>
     <div class="choices fam" role="group" aria-label="Families">
-      ${R.fams.map((f, i) => `<button class="choice" type="button" data-f="${f}"><span class="key">${i + 1}</span><span class="seal">${f}</span><span class="m">${F[f].m || ""}</span></button>`).join("")}
+      ${R.fams.map((f, i) => `<button class="choice" type="button" data-f="${f}"><span class="key">${i + 1}</span><span class="seal">${f}</span><span class="m">${famLabel(f)}</span></button>`).join("")}
     </div>
     <p class="check" id="check"></p>`);
   document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerFamily(b.dataset.f)));
@@ -341,18 +378,27 @@ function answerFamily(f) {
   const { k, f: right } = R.tiles[R.i];
   const ok = f === right;
   R.results.push({ fam: ok, mean: null });
-  record({ step: "family", k, status: K[k][2], right, picked: f, ok });
-  const ask = S.meanings && K[k][2] !== "new";
+  record({ step: isSound() ? "sound_family" : "family", k, status: K[k][2], right, picked: f, ok });
+  const ask = isSound() || (S.meanings && K[k][2] !== "new");
+  const second = isSound() ? readingStep : meaningStep;
   if (ok) {
     S.streak++; bumpBest();
     document.querySelector(`.choice[data-f="${f}"]`).classList.add("right");
     $("check").textContent = "✓";
-    setTimeout(() => (ask ? meaningStep() : nextTile()), 450);
+    setTimeout(() => (ask ? second() : nextTile()), 450);
   } else {
     S.streak = 0; R.missedFams.add(right);
     // feedback screen: the meaning is withheld when it's about to be asked
     S.phase = "review";
-    card(`
+    card(isSound() ? `
+      <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> gets its sound from <span class="g">${right}</span> (${SND[right].r}), not <span class="g">${f}</span> (${SND[f].r})</p>
+      ${partsRow(k, "right", "its parts")}
+      <div class="compare">
+        <div class="crow right"><span class="cg">${right}</span><span class="cm"><b>sounds ${SND[right].r}</b><span class="members">${membersHTML(right)}</span></span></div>
+        <div class="crow picked"><span class="cg">${f}</span><span class="cm"><b>sounds ${SND[f].r}</b><span class="members">${membersHTML(f)}</span></span></div>
+      </div>
+      <button class="next" type="button" id="cont" data-focus>Continue to the reading</button>
+      <p class="sub">or press Enter</p>` : `
       <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> is built on <span class="g">${right}</span>${F[right].m ? " " + F[right].m : ""}, not <span class="g">${f}</span>${F[f].m ? " " + F[f].m : ""}</p>
       <div class="compare">
         <div class="crow right"><span class="cg">${right}</span><span class="cm"><b>its family</b>${F[right].k.join(" ")}</span></div>
@@ -360,7 +406,7 @@ function answerFamily(f) {
       </div>
       <button class="next" type="button" id="cont" data-focus>${ask ? "Continue to the meaning" : "Continue"}</button>
       <p class="sub">or press Enter</p>`);
-    S.afterReview = ask ? meaningStep : nextTile;
+    S.afterReview = ask ? second : nextTile;
     $("cont").addEventListener("click", continueReview);
   }
 }
@@ -408,6 +454,75 @@ function answerMeaning(i) {
   }
 }
 
+// step 2 in Sounds mode: how is it read? (its on'yomi, from the sound part)
+function readingOptions(k) {
+  const R = S.round, f = R.tiles[R.i].f, right = reading(k, f);
+  const own = new Set(K[k][4] || []);
+  const bad = r => own.has(r) || unvoice(r) === unvoice(right);
+  const picked = [];
+  const add = (r, src) => { if (picked.length < 3 && r && !bad(r) && !picked.some(o => unvoice(o.r) === unvoice(r))) picked.push({ r, f: src }); };
+  for (const g of R.fams) if (g !== f) add(SND[g].r, g);
+  for (const g of shuffle(Object.keys(SND))) add(SND[g].r, g);
+  return shuffle([{ r: right, f }, ...picked]);
+}
+
+function readingStep() {
+  const R = S.round, { k } = R.tiles[R.i];
+  R.opts = readingOptions(k);
+  S.phase = "reading"; S.locked = false;
+  renderBar();
+  card(`
+    <p class="q">how is it read?</p>
+    <div class="glyph">${k}</div>
+    <p class="hint">${K[k][0]} · its on'yomi</p>
+    <div class="choices" role="group" aria-label="Readings">
+      ${R.opts.map((o, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="txt">${o.r}</span></button>`).join("")}
+    </div>
+    <p class="check" id="check"></p>`);
+  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerReading(+b.dataset.i)));
+}
+
+function answerReading(i) {
+  const R = S.round;
+  if (S.phase !== "reading" || S.locked) return;
+  S.locked = true;
+  const { k, f } = R.tiles[R.i];
+  const right = reading(k, f), pick = R.opts[i], ok = pick.r === right;
+  R.results[R.results.length - 1].mean = ok;
+  record({ step: "reading", k, status: K[k][2], family: f, right, picked: pick.r, ok });
+  if (ok) {
+    S.streak++; bumpBest();
+    document.querySelectorAll(".choice")[i].classList.add("right");
+    $("check").textContent = `✓ ${right}, from ${f}`;
+    setTimeout(nextTile, 700);
+  } else {
+    S.streak = 0; R.missedFams.add(f);
+    S.phase = "review";
+    card(`
+      <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> reads <b>${right}</b>, from its sound part <span class="g">${f}</span>. You picked ${pick.r}${pick.f && pick.f !== f ? `, the sound of <span class="g">${pick.f}</span>` : ""}</p>
+      ${partsRow(k, "right", "its parts")}
+      <div class="compare"><div class="crow right"><span class="cg">${f}</span><span class="cm"><b>sounds ${SND[f].r}</b><span class="members">${membersHTML(f)}</span></span></div></div>
+      <button class="next" type="button" id="cont" data-focus>Continue</button>
+      <p class="sub">or press Enter</p>`);
+    S.afterReview = nextTile;
+    $("cont").addEventListener("click", continueReview);
+  }
+}
+
+const membersHTML = f => SND[f].k.map(k => `${k}<small>${SND[f].a[k]}</small>`).join("");
+
+// one part chip, tagged with what that part does in this kanji: carries the meaning, or gives the
+// sound (with the part's own reading). Untagged when neither could be worked out.
+function partChip(x, c, cls) {
+  const role = (D.roles && D.roles[x] || {})[c];
+  const tag = role === "s" ? `sound ${D.partOn && D.partOn[c] ? D.partOn[c] : ""}` : role === "m" ? "meaning" : "";
+  return `<span class="part ${cls}${role === "s" ? " snd" : ""}"><span class="pg">${c}</span>${D.parts[c] || ""}${tag ? ` <span class="role">${tag}</span>` : ""}</span>`;
+}
+function partsRow(k, cls, label) {
+  return `<div class="compare"><div class="crow ${cls}"><span class="cg">${k}</span><span class="cm"><b>${label}</b>${K[k][0]}</span>
+    <span class="parts">${(K[k][3] || []).map(c => partChip(k, c, "")).join("")}</span></div></div>`;
+}
+
 // the two kanji side by side, split into parts: what they share is faded, the part that
 // differs is outlined -- green on the right kanji, red on the one whose meaning you picked
 function compareHTML(k, other) {
@@ -415,7 +530,7 @@ function compareHTML(k, other) {
   const row = (x, mine, theirs, cls, label) => `<div class="crow ${cls}">
     <span class="cg">${x}</span>
     <span class="cm"><b>${label}</b>${K[x][0]}</span>
-    <span class="parts">${mine.map(c => `<span class="part ${theirs.includes(c) ? "same" : "diff"}"><span class="pg">${c}</span>${D.parts[c] || ""}</span>`).join("")}</span>
+    <span class="parts">${mine.map(c => partChip(x, c, theirs.includes(c) ? "same" : "diff")).join("")}</span>
   </div>`;
   return `<div class="compare">${row(k, pa, pb, "right", "this one")}${row(other, pb, pa, "picked", "you picked")}</div>`;
 }
@@ -443,8 +558,9 @@ function bumpBest() {
 function endRound() {
   const R = S.round;
   const builtNow = R.fams.filter(f => !R.missedFams.has(f));
-  builtNow.forEach(f => S.built.add(f));
-  store.set("built", [...S.built]);
+  const into = isSound() ? S.builtSound : S.built;
+  builtNow.forEach(f => into.add(f));
+  store.set("built", [...S.built]); store.set("builtSound", [...S.builtSound]);
   record({ step: "round", families: R.fams, rebuilt: builtNow, parent: R.parent || null });
   flushResults();
   const sorted = R.results.filter(r => r.fam).length;
@@ -455,9 +571,9 @@ function endRound() {
   $("b-track").style.width = "100%";
   card(`
     <p class="q">round done</p>
-    <p class="verdict">${sorted} of ${R.results.length} sorted${asked.length ? ` · ${meant} of ${asked.length} meanings` : ""}</p>
+    <p class="verdict">${sorted} of ${R.results.length} sorted${asked.length ? ` · ${meant} of ${asked.length} ${isSound() ? "readings" : "meanings"}` : ""}</p>
     <div class="fams">${R.fams.map(f => `<div class="fam ${builtNow.includes(f) ? "built" : ""}">
-      <b>${f}</b><span>${builtNow.includes(f) ? "rebuilt" : "try again later"}</span><small>${F[f].k.join("")}</small></div>`).join("")}</div>
+      <b>${f}</b><span>${isSound() ? SND[f].r + " · " : ""}${builtNow.includes(f) ? "rebuilt" : "try again later"}</span><small>${famMembers(f).join("")}</small></div>`).join("")}</div>
     <div class="row">
       <button class="next" type="button" id="again" data-focus>Next round</button>
       <button class="ghost" type="button" id="home-btn">Back to start</button>
@@ -477,6 +593,8 @@ function goHome() {
 function renderHome() {
   $("s-built").textContent = `${S.built.size} / ${Object.keys(F).length}`;
   $("s-best").textContent = S.best;
+  $("s-snd").textContent = `${S.builtSound.size} / ${Object.keys(SND).length}`;
+  $("s-snd-box").hidden = !HAS_SOUND;
   const order = Object.keys(F).sort((a, b) => F[b].k.length - F[a].k.length || a.localeCompare(b));
   $("dots").innerHTML = order.map(f => `<i class="${S.built.has(f) ? "built" : ""}" title="${f} ${F[f].m || ""}: ${F[f].k.join("")}"></i>`).join("");
   $("map-note").textContent = `${S.built.size} of ${order.length} families rebuilt: every kanji in it sorted, and its meaning given where asked, in one round. Each square is a family, largest first.`;
@@ -493,7 +611,8 @@ function chipGroup(id, options, current, onPick) {
 }
 
 chipGroup("g-level", Object.keys(LEVEL_SETS).map(l => [l, l.toUpperCase()]), S.level, v => { S.level = v; store.set("level", v); });
-chipGroup("g-mode", [["families", "Families"], ["cousins", "Cousins (harder)"]], S.mode, v => { S.mode = v; store.set("mode", v); });
+chipGroup("g-mode", [["families", "Families"], ["cousins", "Cousins (harder)"]].concat(HAS_SOUND ? [["sounds", "Sounds (readings)"]] : []),
+  S.mode, v => { S.mode = v; store.set("mode", v); });
 chipGroup("g-mean", [["true", "On"], ["false", "Off"]], S.meanings, v => { S.meanings = v === "true"; store.set("meanings", S.meanings); });
 $("start").addEventListener("click", startRound);
 $("quit").addEventListener("click", goHome);
@@ -506,9 +625,11 @@ document.addEventListener("keydown", e => {
   if (S.phase === "family" && /^[1-4]$/.test(e.key)) {
     const f = S.round.fams[+e.key - 1];
     if (f) { e.preventDefault(); answerFamily(f); }
+  } else if (S.phase === "reading" && /^[1-4]$/.test(e.key)) {
+    if (+e.key <= S.round.opts.length) { e.preventDefault(); answerReading(+e.key - 1); }
   } else if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (S.phase === "family" || S.phase === "meaning") {
+  } else if (S.phase === "family" || S.phase === "meaning" || S.phase === "reading") {
     if (e.key === "Escape") goHome();
   }
 });

@@ -14,6 +14,7 @@ import collections, datetime, json, os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import quiz as q
+import sound_families
 
 q.use_vault(sys.argv[1])
 kanji, _ = q.build()
@@ -82,14 +83,25 @@ data = {
     "kanji": {k: [q.short(kanji[k]["text"]), q.level(kanji[k]["text"]), status(k), kanji[k]["comps"]]
               for k in pool},
 }
+kdb_path = os.path.join(os.path.dirname(HERE), ".jkgv_cache", "kanji.json")
+if os.path.exists(kdb_path):
+    kdb = json.load(open(kdb_path, encoding="utf-8"))
+    sounds, roles, on = sound_families.build(kanji, pool, kdb)
+    for k in pool:
+        data["kanji"][k].append(on(k))
+    data["sound"] = sounds
+    data["roles"] = roles
 used = {c for k in pool for c in kanji[k]["comps"]}
 data["parts"] = {c: (q.short(kanji[c]["text"]) if c in kanji else
                      ("" if cm.get(c, "").startswith("u+") else cm.get(c, "").split(",")[0].strip()))
                  for c in used}
+if "sound" in data:
+    data["partOn"] = {c: on(c)[0] for c in used if on(c)}
 blob = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 assert "</script" not in blob
 tpl = sys.argv[3] if len(sys.argv) > 3 else "family_tree_template.html"
 template = open(os.path.join(HERE, tpl), encoding="utf-8").read()
 open(sys.argv[2], "w", encoding="utf-8").write(template.replace("__DATA__", blob))
 st = collections.Counter(v[2] for v in data["kanji"].values())
-print(f"{len(fams)} families, {len(data['roots'])} top-level, {len(data['loners'])} on their own; {dict(st)}")
+print(f"{len(fams)} families, {len(data['roots'])} top-level, {len(data['loners'])} on their own; {dict(st)}"
+      + (f"; {len(data['sound'])} sound families" if "sound" in data else ""))
