@@ -51,6 +51,17 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .prog th:first-child, .prog td:first-child { text-align: left; padding-left: 0; }
 .prog td.pc { color: var(--muted); }
 .prog tr.dim td { color: var(--muted); opacity: .55; }
+.prog + .prog { margin-top: 10px; }
+.glyph.word { font-size: clamp(2.6rem, 14vw, 4.4rem); letter-spacing: .04em; text-align: center; }
+.wread { font-size: 1.3rem; margin: -6px 0 0; color: var(--indigo); }
+.wsplit { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.wu { display: grid; justify-items: center; gap: 2px; padding: 8px 12px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--sheet); min-width: 64px; }
+.wu b { font-family: var(--glyph); font-weight: 700; font-size: 2rem; line-height: 1.1; }
+.wu span { font-size: 1rem; color: var(--indigo); }
+.wu small { font-size: .78rem; color: var(--ink); max-width: 14ch; text-align: center; }
+.wu em { font-style: normal; font-size: .68rem; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); text-align: center; max-width: 18ch; }
+.wu.kana { border-style: dashed; }
+.fam b.wf { font-size: 1.4rem; }
 .prog-wrap { overflow-x: auto; }
 .stats span { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .setting { display: grid; gap: 8px; }
@@ -161,7 +172,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
   <section class="home" id="home">
     <div>
       <h1><span class="jp">家系</span>Kanji Family Builder</h1>
-      <p class="lede">Put each kanji back into its family by finding the part it's built on, then say what it means. In Sounds mode, find the part that gives its reading, then pick the reading. Build mode takes one kanji apart completely: all its parts, which one gives the sound, its meaning and its reading. One question at a time.</p>
+      <p class="lede">Put each kanji back into its family by finding the part it's built on, then say what it means. In Sounds mode, find the part that gives its reading, then pick the reading. Build mode takes one kanji apart completely: all its parts, which one gives the sound, its meaning and its reading. Words mode teaches readings inside real words, showing which reading each kanji takes. One question at a time.</p>
     </div>
     <div class="stats">
       <div><b id="s-built">0</b><span>families rebuilt</span></div>
@@ -169,7 +180,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
       <div><b id="s-kanji">0</b><span>kanji fully built</span></div>
       <div><b id="s-best">0</b><span>best streak</span></div>
     </div>
-    <div class="prog-wrap"><table class="prog" id="prog"></table><p class="note" id="prog-note"></p></div>
+    <div class="prog-wrap"><table class="prog" id="prog"></table><table class="prog" id="vprog"></table><p class="note" id="prog-note"></p></div>
     <div class="setting"><span>levels</span><div class="chips" id="g-level"></div></div>
     <div class="setting"><span>focus</span><div class="chips" id="g-focus"></div><span class="note" id="due-note"></span></div>
     <div class="setting"><span>mode</span><div class="chips" id="g-mode"></div></div>
@@ -228,6 +239,8 @@ const S = {
   learnedSound: new Set(store.get("learnedSound", [])),
   focus: store.get("focus", "due"),
   reviewed: store.get("reviewed", {}),
+  wseen: store.get("wseen", {}),
+  wrev: store.get("wrev", {}),
   best: store.get("best", 0),
   streak: 0,
   round: null,
@@ -434,6 +447,7 @@ function renderBar() {
 
 function startRound() {
   if (S.mode === "build") return startBuild();
+  if (S.mode === "words") return startWords();
   const { fams, parent } = pickFamilies();
   show("play");
   if (fams.length < 2) {
@@ -886,6 +900,244 @@ function endBuild() {
   $("home-btn").addEventListener("click", goHome);
 }
 
+// ======================= words: readings learned in context
+const W = D.words || {}, KUN = D.kun || {}, VS = D.vsrs || {};
+const HAS_WORDS = Object.keys(W).length > 0;
+const wKanji = w => W[w][5].filter(u => K[u[0]]).map(u => u[0]);
+const wInLevel = w => LEVEL_SETS[S.level].includes(W[w][3]);
+const wStarted = w => VS[w] || S.wseen[w];
+const wDue = w => S.wrev[w] !== todayISO() && (VS[w] ? VS[w][0] <= todayISO() : !!S.wseen[w] && S.wseen[w] < todayISO());
+const wHard = w => VS[w] && VS[w][1] >= 3 && S.wrev[w] !== todayISO();
+function dueWords() {
+  return Object.keys(W).filter(w => !W[w][4] && wInLevel(w) && (wDue(w) || wHard(w)))
+    .sort((a, b) => wHard(b) - wHard(a) || ((VS[a] || [S.wseen[a]])[0] || "").localeCompare((VS[b] || [S.wseen[b]])[0] || ""));
+}
+// new words, cheapest first (as the quiz's --vocab): every kanji known, then one still being learned
+function newWords() {
+  const tier = w => {
+    const open = wKanji(w).filter(k => K[k][2] !== "known");
+    return !open.length ? 0 : open.length === 1 && K[open[0]][2] !== "new" ? 1 : 2;
+  };
+  return Object.keys(W).filter(w => !W[w][4] && !wStarted(w) && wInLevel(w) && wKanji(w).length)
+    .map(w => [tier(w), LV.indexOf(W[w][3]), W[w][0].length, w]).filter(x => x[0] < 2)
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]).map(x => x[3]);
+}
+// words that carry a due or hard kanji, so its reading is learned where it's used
+function focusWords() {
+  const out = [], fk = focusKanji();
+  for (const k of fk) {
+    const w = Object.keys(W).find(w => !W[w][4] && !wStarted(w) && !out.includes(w) && W[w][0].includes(k) &&
+      wKanji(w).every(x => x === k || K[x][2] !== "new"));
+    if (w) out.push(w);
+    if (out.length >= 2) break;
+  }
+  return out;
+}
+function pickWords() {
+  const due = dueWords();
+  const fresh = [...new Set(S.focus === "due" ? focusWords().concat(newWords()) : newWords())];
+  const nDue = S.focus === "due" ? Math.min(due.length, 4) : Math.min(due.length, 3);
+  const pick = due.slice(0, nDue).concat(fresh.slice(0, Math.min(4, 6 - nDue)));
+  S.fellBack = S.focus === "due" && !due.length;
+  return pick.concat(due.slice(nDue, nDue + 6 - pick.length));
+}
+
+function startWords() {
+  show("play");
+  const ws = pickWords();
+  if (!ws.length) {
+    S.phase = null;
+    card(`<p class="verdict">No words to practise at this level.</p><button class="next" type="button" id="home-btn" data-focus>Back</button>`);
+    $("home-btn").addEventListener("click", goHome);
+    return;
+  }
+  // a new word is studied first and tested three words later, as in the quiz
+  const tiles = ws.map(w => ({ k: w, study: !wStarted(w) }));
+  for (let j = tiles.length - 1; j >= 0; j--) if (tiles[j].study) tiles.splice(Math.min(tiles.length, j + 4), 0, { k: tiles[j].k, fresh: true });
+  S.round = { words: true, fams: [], tiles, i: 0, results: [], missedFams: new Set(),
+              notice: S.fellBack ? "no words due: new words" : "" };
+  wordTile();
+}
+function wordTile() {
+  const R = S.round, t = R.tiles[R.i];
+  renderBar();
+  if (t.study) return wordStudy(t.k);
+  R.cur = { k: t.k, read: null, mean: null };
+  wordReadingStep();
+}
+
+// the word split into its kanji, each with the reading it takes here
+function soundNote(k, piece) {
+  const f = soundFamilyOf(k);
+  return f && unvoice(SND[f].a[k] || "") === unvoice(piece) ? `from its sound part ${f}` : "";
+}
+function splitHTML(w) {
+  return `<div class="wsplit">${W[w][5].map(([text, piece, t]) => {
+    if (!t) return `<div class="wu kana"><b>${text}</b><span>${piece}</span></div>`;
+    const k = K[text] ? text : null;
+    const kind = t === "o" ? "on" : t === "k" ? "kun" : "special";
+    const note = k && t === "o" ? soundNote(k, piece) : "";
+    return `<div class="wu"><b>${text}</b><span>${piece}</span><small>${k ? K[k][0] : ""}</small><em>${kind}${note ? " · " + note : ""}</em></div>`;
+  }).join("")}</div>`;
+}
+function wordStudy(w) {
+  S.phase = "wstudy";
+  S.wseen[w] = S.wseen[w] || todayISO(); store.set("wseen", S.wseen);
+  card(`
+    <p class="q">new word</p>
+    <div class="glyph word">${W[w][0]}</div>
+    <p class="wread">${W[w][1]}</p>
+    <p class="hint">${W[w][2]}</p>
+    ${splitHTML(w)}
+    <button class="next" type="button" id="cont" data-focus>Got it</button>
+    <p class="sub">it comes back as a question in a few words</p>`);
+  $("cont").addEventListener("click", wordAdvance);
+}
+
+const hiraOf = s => s.replace(/[ァ-ヶ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
+// wrong readings you might actually give: one kanji read as its sibling, or with its other reading
+function wordReadingOptions(w) {
+  const seg = W[w][5], right = W[w][1], accepted = new Set(W[w][6].concat(right));
+  const picked = [];
+  const add = (r, why) => { if (picked.length < 3 && r && !accepted.has(r) && !picked.some(o => o.r === r)) picked.push({ r, why }); };
+  const swap = (i, alt) => seg.map((u, j) => j === i ? alt : u[1]).join("");
+  const slots = shuffle(seg.map((u, i) => i).filter(i => seg[i][2] && K[seg[i][0]]));
+  for (const i of slots) {
+    const k = seg[i][0];
+    const sibs = [...new Set((famOf[k] ? F[famOf[k]].k : []).concat(soundFamilyOf(k) ? SND[soundFamilyOf(k)].k : []))]
+      .filter(x => x !== k && K[x] && (K[x][4] || []).length);
+    for (const x of shuffle(sibs).slice(0, 2)) add(swap(i, hiraOf(K[x][4][0])), `${K[x][4][0]} is how ${x} is read`);
+  }
+  for (const i of slots) {
+    const k = seg[i][0];
+    const others = (seg[i][2] === "o" ? KUN[k] || [] : (K[k][4] || []).map(hiraOf)).filter(r => r !== seg[i][1]);
+    for (const r of shuffle(others.slice()).slice(0, 2)) add(swap(i, r), `${r} is ${k}'s ${seg[i][2] === "o" ? "kun" : "on"} reading, not the one used here`);
+  }
+  const ks = wKanji(w);
+  for (const x of shuffle(Object.keys(W)).slice(0, 400)) {
+    if (x !== w && W[x][0].length === W[w][0].length && ks.some(k => W[x][0].includes(k))) add(W[x][1], `that's ${W[x][0]}`);
+  }
+  for (const x of shuffle(Object.keys(W)).slice(0, 200)) if (Math.abs(W[x][1].length - right.length) <= 1) add(W[x][1], `that's ${W[x][0]}`);
+  return shuffle([{ r: right, why: "" }, ...picked]);
+}
+function wordReadingStep() {
+  const R = S.round, w = R.cur.k;
+  R.opts = wordReadingOptions(w);
+  S.phase = "wreading"; S.locked = false;
+  card(`
+    <p class="q">how is it read?</p>
+    <div class="glyph word">${W[w][0]}</div>
+    <p class="hint">${W[w][3].toUpperCase()} word</p>
+    <div class="choices" role="group" aria-label="Readings">
+      ${R.opts.map((o, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="txt">${o.r}</span></button>`).join("")}
+    </div>
+    <p class="check" id="check"></p>`);
+  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerWordReading(+b.dataset.i)));
+}
+function answerWordReading(i) {
+  const R = S.round;
+  if (S.phase !== "wreading" || S.locked || i >= R.opts.length) return;
+  S.locked = true;
+  const w = R.cur.k, o = R.opts[i], ok = o.r === W[w][1];
+  R.cur.read = ok; R.cur.pickedR = o.r;
+  if (ok) {
+    S.streak++; bumpBest();
+    document.querySelectorAll(".choice")[i].classList.add("right");
+    $("check").textContent = `✓ ${W[w][1]}`;
+    setTimeout(wordMeaningStep, 650);
+  } else {
+    S.streak = 0;
+    S.phase = "review";
+    card(`
+      <p class="verdict"><span class="no">✗</span> <span class="g">${W[w][0]}</span> reads <b>${W[w][1]}</b>. You picked ${o.r}${o.why ? `: ${o.why}` : ""}.</p>
+      ${splitHTML(w)}
+      <button class="next" type="button" id="cont" data-focus>Continue</button>`);
+    S.afterReview = wordMeaningStep;
+    $("cont").addEventListener("click", continueReview);
+  }
+}
+function wordMeaningOptions(w) {
+  const right = W[w][2], ks = wKanji(w), verb = /^to /.test(right);
+  const picked = [];
+  const add = x => { const g = W[x][2]; if (picked.length < 3 && x !== w && g && !overlaps(g, right) && !picked.some(o => overlaps(o.g, g))) picked.push({ g, w: x }); };
+  for (const x of shuffle(Object.keys(W)).filter(x => ks.some(k => W[x][0].includes(k))).slice(0, 60)) add(x);
+  for (const x of shuffle(Object.keys(W)).slice(0, 300)) if (W[x][3] === W[w][3] && /^to /.test(W[x][2]) === verb) add(x);
+  return shuffle([{ g: right, w }, ...picked]);
+}
+function wordMeaningStep() {
+  const R = S.round, w = R.cur.k;
+  R.opts = wordMeaningOptions(w);
+  S.phase = "wmeaning"; S.locked = false;
+  card(`
+    <p class="q">what does it mean?</p>
+    <div class="glyph word">${W[w][0]}</div>
+    <p class="wread">${W[w][1]}</p>
+    <div class="choices" role="group" aria-label="Meanings">
+      ${R.opts.map((o, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="txt">${o.g}</span></button>`).join("")}
+    </div>
+    <p class="check" id="check"></p>`);
+  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerWordMeaning(+b.dataset.i)));
+}
+function answerWordMeaning(i) {
+  const R = S.round;
+  if (S.phase !== "wmeaning" || S.locked || i >= R.opts.length) return;
+  S.locked = true;
+  const w = R.cur.k, o = R.opts[i], ok = o.w === w;
+  R.cur.mean = ok;
+  const t = R.tiles[R.i];
+  record({ step: "word", w, ok: R.cur.read && ok, read_ok: R.cur.read, mean_ok: ok, picked_r: R.cur.pickedR, picked_m: o.w,
+           fresh: !!t.fresh, known: !!W[w][4] });
+  R.results.push({ ...R.cur, retry: !!t.retry });
+  if (R.cur.read && ok) { S.wrev[w] = todayISO(); store.set("wrev", S.wrev); }
+  else t.missed = true;
+  if (ok) {
+    S.streak++; bumpBest();
+    document.querySelectorAll(".choice")[i].classList.add("right");
+    $("check").textContent = `✓ ${W[w][2]}`;
+    setTimeout(wordAdvance, 650);
+  } else {
+    S.streak = 0;
+    S.phase = "review";
+    card(`
+      <p class="verdict"><span class="no">✗</span> <span class="g">${W[w][0]}</span> (${W[w][1]}) means <b>${W[w][2]}</b>. You picked ${o.g}: that's <span class="g">${W[o.w][0]}</span> (${W[o.w][1]}).</p>
+      ${splitHTML(w)}
+      <button class="next" type="button" id="cont" data-focus>Continue</button>`);
+    S.afterReview = wordAdvance;
+    $("cont").addEventListener("click", continueReview);
+  }
+}
+function wordAdvance() {
+  const R = S.round;
+  if (S.phase === "wstudy") S.phase = null;
+  const t = R.tiles[R.i];
+  if (!t.study) requeueIfMissed(R);
+  R.i++;
+  R.i < R.tiles.length ? wordTile() : endWords();
+}
+function endWords() {
+  const R = S.round;
+  record({ step: "round", words: R.tiles.filter(t => !t.study).map(t => t.k) });
+  flushResults();
+  const first = R.results.filter(r => !r.retry), both = first.filter(r => r.read && r.mean).length;
+  const mark = v => v ? "✓" : "✗";
+  S.phase = "summary";
+  S.summaryAt = Date.now();
+  renderBar();
+  $("b-track").style.width = "100%";
+  card(`
+    <p class="q">round done</p>
+    <p class="verdict">${both} of ${first.length} words read and understood first time</p>
+    <div class="fams">${first.map(r => `<div class="fam ${r.read && r.mean ? "built" : ""}"><b class="wf">${W[r.k][0]}</b>
+      <span>${W[r.k][1]} · reading ${mark(r.read)} · meaning ${mark(r.mean)}</span></div>`).join("")}</div>
+    <div class="row">
+      <button class="next" type="button" id="again" data-focus>Next round</button>
+      <button class="ghost" type="button" id="home-btn">Back to start</button>
+    </div>
+    <p class="sub">Enter for the next round</p>`);
+  $("again").addEventListener("click", startRound);
+  $("home-btn").addEventListener("click", goHome);
+}
+
 // ======================= lessons: a sound family taught before it's ever asked
 const RADS = new Set((D.meaningRadicals || []).map(r => r[0]));
 function soundFamilyOf(k) {
@@ -953,6 +1205,7 @@ function requeueIfMissed(R) {
 function nextTile() {
   const R = S.round;
   if (R.build) return buildAdvance();
+  if (R.words) return wordAdvance();
   requeueIfMissed(R);
   R.i++;
   R.i < R.tiles.length ? familyStep() : endRound();
@@ -1011,7 +1264,16 @@ function renderHome() {
       `<td>${st}</td><td>${close}</td><td>${hard}</td><td>${t - kn - st}</td></tr>`).join("") : "";
   $("prog-note").textContent = (D.progress || []).length
     ? `Your quiz progress as of ${D.generated}. Close: next review 14+ days out. Hard: missed 3+ times.` : "";
+  $("vprog").innerHTML = (D.vprogress || []).length ? `<tr><th>words</th><th>known</th><th></th><th>learning</th><th>close</th><th>hard</th><th>new</th></tr>` +
+    D.vprogress.map(([l, t, kn, st, close, hard]) =>
+      `<tr class="${lv.includes(l) ? "" : "dim"}"><td>${l.toUpperCase()}</td><td>${kn}/${t}</td><td class="pc">${Math.floor(100 * kn / t)}%</td>` +
+      `<td>${st}</td><td>${close}</td><td>${hard}</td><td>${t - kn - st}</td></tr>`).join("") : "";
   const fk = focusKanji();
+  if (S.mode === "words") {
+    const dw = dueWords(), started = Object.keys(S.wseen).filter(w => !VS[w]).length;
+    $("due-note").textContent = `${dw.length} words due at ${S.level.toUpperCase()}` +
+      (started ? `; ${started} started here since the last sync` : "") + `. New words come from kanji you know or are learning.`;
+  } else
   $("due-note").textContent = Object.keys(SRS).length
     ? `${fk.length} due or hard at ${S.level.toUpperCase()} (${fk.filter(isHard).length} hard), from your quiz schedule as of ${D.generated}`
     : "";
@@ -1032,8 +1294,8 @@ function chipGroup(id, options, current, onPick) {
 
 chipGroup("g-level", Object.keys(LEVEL_SETS).map(l => [l, l.toUpperCase()]), S.level, v => { S.level = v; store.set("level", v); renderHome(); });
 chipGroup("g-focus", [["due", "Due & hard"], ["all", "Everything"]], S.focus, v => { S.focus = v; store.set("focus", v); renderHome(); });
-chipGroup("g-mode", [["families", "Families"], ["cousins", "Cousins (harder)"]].concat(HAS_SOUND ? [["sounds", "Sounds (readings)"]] : [], [["build", "Build (whole kanji)"]]),
-  S.mode, v => { S.mode = v; store.set("mode", v); });
+chipGroup("g-mode", [["families", "Families"], ["cousins", "Cousins (harder)"]].concat(HAS_SOUND ? [["sounds", "Sounds (readings)"]] : [], [["build", "Build (whole kanji)"]], HAS_WORDS ? [["words", "Words (readings)"]] : []),
+  S.mode, v => { S.mode = v; store.set("mode", v); renderHome(); });
 chipGroup("g-mean", [["true", "On"], ["false", "Off"]], S.meanings, v => { S.meanings = v === "true"; store.set("meanings", S.meanings); });
 $("start").addEventListener("click", startRound);
 $("quit").addEventListener("click", goHome);
@@ -1044,6 +1306,9 @@ document.addEventListener("keydown", e => {
   // a quick second Enter from the last feedback screen shouldn't skip past the summary
   if (S.phase === "summary" && e.key === "Enter") { e.preventDefault(); if (Date.now() - S.summaryAt > 500) startRound(); return; }
   if (S.phase === "lesson" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueLesson(); return; }
+  if (S.phase === "wstudy" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); wordAdvance(); return; }
+  if (S.phase === "wreading" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerWordReading(+e.key - 1); return; }
+  if (S.phase === "wmeaning" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerWordMeaning(+e.key - 1); return; }
   if ((S.phase === "soundpart" || (S.phase === "family" && isSound())) && e.key === "h") {
     e.preventDefault(); radicalHint(S.round.tiles[S.round.i].k); return;
   }
@@ -1058,7 +1323,7 @@ document.addEventListener("keydown", e => {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerReading(+e.key - 1); }
   } else if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading"].includes(S.phase)) {
+  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading", "wstudy", "wreading", "wmeaning"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });

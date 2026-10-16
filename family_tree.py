@@ -15,9 +15,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import quiz as q
 import sound_families
+import word_align
 
 q.use_vault(sys.argv[1])
-kanji, _ = q.build()
+kanji, vocab = q.build()
 cm = q.load_component_meanings()
 state = q.load_state()
 fams, home = q.build_families(kanji)
@@ -106,6 +107,38 @@ for k, d in kanji.items():
         r[3] += state[k].get("ivl", 0) >= 14
         r[4] += q.is_hard(state[k])
 data["progress"] = [[lvl] + prog[lvl] for lvl in q.P["levels"] if prog[lvl][0]]
+# words, for learning readings in context: [shown, reading, gloss, level, known, split, other readings]
+if os.path.exists(kdb_path):
+    vstate = q.load_state(os.path.join(q.VAULT, q.VOCAB_STATE_FILE))
+    words, kun = {}, {}
+    for w, d in vocab.items():
+        if not q.vocab_ok(w, d):
+            continue
+        rs = [r for r in re.split(r"[\s/／、,・]+", q.shown_reading(w, d)) if r]
+        if not rs:
+            continue
+        shown = re.split("[／/]", w)[0]
+        gloss = "; ".join(q.meaning(d["text"]).split(";")[:2]).strip()
+        seg = word_align.align(shown, rs[0], kdb)
+        words[w] = [shown, word_align.hira(rs[0]), gloss, q.level(d["text"]), int(d["known"]), seg,
+                    sorted(q.accepted_readings(w, d))]
+        for c in shown:
+            if c in kanji and c not in kun:
+                kun[c] = word_align.readings_of(kdb.get(c, {}))[1][:6]
+    data["words"], data["kun"] = words, kun
+    data["vsrs"] = {w: [datetime.date.fromordinal(c["due"]).isoformat(), c.get("lapses", 0)]
+                    for w, c in vstate.items() if w in words and not words[w][4] and c.get("due")}
+    vprog = collections.defaultdict(lambda: [0, 0, 0, 0, 0])
+    for w, x in words.items():
+        r = vprog[x[3]]
+        r[0] += 1
+        if x[4]:
+            r[1] += 1
+        elif w in vstate:
+            r[2] += 1
+            r[3] += vstate[w].get("ivl", 0) >= 14
+            r[4] += q.is_hard(vstate[w])
+    data["vprogress"] = [[lvl] + vprog[lvl] for lvl in q.P["levels"] if vprog[lvl][0]]
 used = {c for k in pool for c in kanji[k]["comps"]}
 data["parts"] = {c: (q.short(kanji[c]["text"]) if c in kanji else
                      ("" if cm.get(c, "").startswith("u+") else cm.get(c, "").split(",")[0].strip()))
