@@ -101,6 +101,12 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .track { flex: 1; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
 .track i { display: block; height: 100%; background: var(--indigo); transition: width .2s; }
 .step { display: grid; justify-items: center; gap: 18px; text-align: center; }
+.step.fail { box-shadow: inset 0 0 0 2px var(--bad); background: var(--bad-bg); border-radius: 16px; padding: 18px 14px; animation: shake .42s ease-in-out; }
+.shake { animation: shake .42s ease-in-out; }
+@keyframes shake { 0%, 100% { transform: none; } 15% { transform: translateX(-9px); } 35% { transform: translateX(8px); } 55% { transform: translateX(-6px); } 75% { transform: translateX(4px); } 90% { transform: translateX(-2px); } }
+.wtype.bad { border-color: var(--bad); background: var(--bad-bg); }
+.miss-note { color: var(--bad); font-weight: 600; margin: 0; max-width: 46ch; }
+.choice.wrong { pointer-events: none; opacity: .8; }
 .q { font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0; }
 .glyph { font-family: var(--glyph); font-weight: 700; font-size: 6rem; line-height: 1; margin: 4px 0; }
 .hint { font-size: .9rem; color: var(--muted); margin: -10px 0 0; min-height: 1.3em; }
@@ -181,7 +187,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
 .enter { animation: rise .2s ease-out; }
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (max-width: 480px) { .glyph { font-size: 4.8rem; } h1 { font-size: 1.5rem; } }
-@media (prefers-reduced-motion: reduce) { .enter { animation: none; } .track i { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .enter, .step.fail, .shake { animation: none; } .track i { transition: none; } }
 </style>
 
 <div class="wrap">
@@ -203,7 +209,8 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
       <button class="start" id="plan-start" type="button">Start today's plan</button>
       <p class="note" id="plan-note"></p>
     </div>
-    <div class="setting"><span>or choose</span><div class="chips" id="g-mode"></div></div>
+    <div class="setting"><span>kanji</span><div class="chips" id="g-mode"></div></div>
+    <div class="setting"><span>words</span><div class="chips" id="g-words"></div></div>
     <div class="setting"><span>more</span><div class="chips" id="g-more"></div></div>
     <div class="setting"><span>meanings</span><div class="chips" id="g-mean"></div></div>
     <details class="guide" id="guide">
@@ -279,8 +286,8 @@ const S = {
 if (!LEVEL_SETS[S.level]) S.level = "n5–n4";
 const SND = D.sound || {};
 const HAS_SOUND = Object.keys(SND).length > 0;
-if (S.mode === "new") S.mode = "build";
-if (!["families", "cousins", "sounds", "build", "words", "lookalikes"].includes(S.mode) || (S.mode === "sounds" && !HAS_SOUND)) S.mode = "families";
+if (S.mode === "new") S.mode = "knew";
+if (!["knew", "build", "lookalikes", "wnew", "words", "families", "cousins", "sounds"].includes(S.mode) || (S.mode === "sounds" && !HAS_SOUND)) S.mode = "families";
 // ---- the schedule: your quiz's cards as of the last sync, plus what you've answered here since,
 // applied with the same rules game_sync.py uses, so progress shows before it reaches the vault
 const SRS = D.srs || {}, VS = D.vsrs || {};
@@ -517,9 +524,13 @@ function show(view) {
 }
 function card(html) {
   const c = $("card");
-  c.innerHTML = `<div class="step enter">${html}</div>`;
+  c.innerHTML = `<div class="step enter${html.includes('class="no"') ? " fail" : ""}">${html}</div>`;
   const first = c.querySelector("[data-focus]");
   if (first) first.focus();
+}
+function shake(el) {
+  if (!el || !el.classList) return;
+  el.classList.remove("shake"); void el.offsetWidth; el.classList.add("shake");
 }
 function renderBar() {
   const R = S.round;
@@ -531,8 +542,10 @@ function renderBar() {
 
 function startRound() {
   if (S.inPlan) return planNext();
+  if (S.mode === "knew") return startBuild({ due: [], fresh: pickNewKanji(4) });
   if (S.mode === "build") return startBuild();
-  if (S.mode === "words") return startWords();
+  if (S.mode === "wnew") return startWords(newWordsToLearn().slice(0, 4), "No new words to learn at this level: words come from kanji you know or are learning.");
+  if (S.mode === "words") return startWords(dueWords().slice(0, 6), "No words due at this level. Learn some under Words → New.");
   if (S.mode === "lookalikes") return startLookalikes();
   const { fams, parent } = pickFamilies();
   show("play");
@@ -768,13 +781,12 @@ function newBudget() {
 }
 const newLeft = () => Math.max(0, newBudget() - dayLog().started);
 function pushRecent(ok) { S.recent.push(!!ok); S.recent = S.recent.slice(-60); store.set("recent", S.recent); }
-// due kanji first; a round with room left takes new kanji too (studied, then built from memory)
+// due and hard kanji; with nothing due (or Everything), practice on kanji you've started
 function pickBuildKanji() {
   S.fellBack = false;
   if (S.focus === "due") {
     const due = focusKanji().filter(k => (K[k][3] || []).length >= 2).slice(0, 5);
-    const fresh = pickNewKanji(Math.min(5 - due.length, newLeft(), 4));
-    if (due.length || fresh.length) return { due, fresh };
+    if (due.length) return { due, fresh: [] };
     S.fellBack = true;
   }
   const lv = curLevels();
@@ -1156,21 +1168,19 @@ function focusWords() {
   }
   return out;
 }
-function pickWords() {
-  const due = dueWords();
-  const fresh = [...new Set(S.focus === "due" ? focusWords().concat(newWords()) : newWords())];
-  const nDue = S.focus === "due" ? Math.min(due.length, 4) : Math.min(due.length, 3);
-  const pick = due.slice(0, nDue).concat(fresh.slice(0, Math.min(4, 6 - nDue)));
-  S.fellBack = S.focus === "due" && !due.length;
-  return pick.concat(due.slice(nDue, nDue + 6 - pick.length));
+// new words serve the kanji: anchor words of kanji you've started, then words carrying your due kanji, then the rest
+function newWordsToLearn() {
+  const anchors = Object.keys(K).filter(k => inLevel(k) && kStatus(k) !== "new").map(anchorOf)
+    .filter(w => w && !W[w][4] && !wStarted(w));
+  return [...new Set(anchors.concat(focusWords(), newWords()))];
 }
 
-function startWords(list) {
+function startWords(ws, empty) {
   show("play");
-  const ws = list || pickWords();
+  S.fellBack = false;
   if (!ws.length) {
     S.phase = null;
-    card(`<p class="verdict">No words to practise at this level.</p><button class="next" type="button" id="home-btn" data-focus>Back</button>`);
+    card(`<p class="verdict">${empty || "No words to practise at this level."}</p><button class="next" type="button" id="home-btn" data-focus>Back</button>`);
     $("home-btn").addEventListener("click", goHome);
     return;
   }
@@ -1578,6 +1588,7 @@ function checkLookPick() {
 }
 function lookTile() {
   const R = S.round, t = R.tiles[R.i];
+  S.overrule = null;
   renderBar();
   if (t.kind === "shared" || t.kind === "diff") return lookPick(t);
   if (t.kind === "compare") return lookCompare(t.g);
@@ -1611,7 +1622,7 @@ function lookCompare(g) {
   $("cont").addEventListener("click", lookAdvance);
 }
 function lookType(t) {
-  S.phase = "ltype"; S.locked = false; S.overrule = null;
+  S.phase = "ltype"; S.locked = false;
   card(`
     <p class="q">what does it mean? <span class="typed-tag">type it</span></p>
     <div class="glyph">${t.k}</div>
@@ -1620,49 +1631,84 @@ function lookType(t) {
         aria-label="Meaning" placeholder="meaning in English" data-focus>
       <button class="next" type="button" id="lcheck">Check</button>
     </div>
+    <div id="lmiss"></div>
     <p class="check" id="check"></p>
-    <p class="sub">one of its meanings is enough · Enter to check, empty to give up</p>`);
+    <p class="sub">one of its meanings is enough · Enter to check, empty to see choices</p>`);
   $("ltype").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); checkLook(); } });
   $("lcheck").addEventListener("click", checkLook);
 }
 const kAnswer = k => (D.answer && D.answer[k]) || K[k][0];
+// a clue that doesn't give the answer away: the kanji's parts, the one that sets it apart outlined
+function clueHTML(k, other) {
+  const mine = ownParts(k), theirs = other ? ownParts(other) : [];
+  const row = (x, ps, vs, label) => `<div class="crow"><span class="cg">${x}</span><span class="cm"><b>${label}</b></span>
+    <span class="parts">${ps.map(c => partChip(x, c, vs.includes(c) ? "same" : "diff")).join("")}</span></div>`;
+  return `<div class="compare">${row(k, mine, theirs, "this one")}${other ? row(other, theirs, mine, `${other} means ${K[other][0]}`) : ""}</div>`;
+}
+// the first answer is what counts for the schedule; the rest is practice until it's right
+function firstTry(t, ok, extra) {
+  if (t.tries) return;
+  record({ step: "meaning", k: t.k, status: K[t.k][2], typed: true, ok, due: !!isDue(t.k), ...extra });
+  countKanji(t.k, ok, false);
+  pushRecent(ok);
+  S.round.results.push({ k: t.k, ok, retry: !!t.retry, gi: t.gi });
+  if (!ok) { t.missed = true; S.streak = 0; } else { S.streak++; bumpBest(); }
+}
+function lookRight(t) {
+  $("check").textContent = `✓ ${kAnswer(t.k)}`;
+  S.locked = true;
+  setTimeout(lookAdvance, 1100);
+}
 function checkLook() {
   const R = S.round, t = R.tiles[R.i];
   if (S.phase !== "ltype" || S.locked) return;
-  S.locked = true;
-  const k = t.k, guess = $("ltype").value.trim();
-  const ok = !!guess && isMatch(guess, kAnswer(k));
-  const other = guess && !ok ? t.g.find(x => x !== k && isMatch(guess, kAnswer(x))) : null;
-  const res = { k, ok, retry: !!t.retry, gi: t.gi };
-  R.results.push(res);
-  const done = () => {
-    record({ step: "meaning", k, status: K[k][2], picked: other || null, guess, typed: true, ok: res.ok, due: !!isDue(k) });
-    countKanji(k, res.ok, false);
-    pushRecent(res.ok);
-    if (!res.ok) t.missed = true;
-    lookAdvance();
-  };
-  if (ok) {
-    S.streak++; bumpBest();
-    $("check").textContent = `✓ ${kAnswer(k)}`;
-    setTimeout(done, 1000);
-    return;
-  }
-  S.streak = 0;
-  S.phase = "review";
-  S.overrule = () => { res.ok = true; S.overrule = null; continueReview(); };
+  const k = t.k, input = $("ltype"), guess = input.value.trim();
+  if (!guess) { firstTry(t, false, { guess: "" }); t.tries = (t.tries || 0) + 1; return lookChoose(t); }
+  const ok = isMatch(guess, kAnswer(k));
+  const other = !ok ? t.g.find(x => x !== k && isMatch(guess, kAnswer(x))) : null;
+  firstTry(t, ok, { guess, picked: other || null });
+  if (t.tries) record({ step: "look_again", k, guess, ok, how: "typed" });
+  if (ok) return lookRight(t);
+  t.tries = (t.tries || 0) + 1;
+  if (t.tries >= 2) return lookChoose(t, `“${guess.replace(/</g, "&lt;")}” isn't it either.`);
+  input.classList.add("bad"); shake(input.closest(".step")); input.value = ""; input.focus();
+  const esc = guess.replace(/</g, "&lt;");
+  $("lmiss").innerHTML = `<p class="miss-note">✗ “${esc}” isn't it${other ? `: that's ${other}` : ""}. Try once more.</p>
+    ${clueHTML(k, other || t.g.find(x => x !== k))}
+    <button class="ghost" type="button" id="overrule">I was right (r)</button>`;
+  S.overrule = () => { S.overrule = null; R.results[R.results.length - 1].ok = true; t.missed = false; lookRight(t); };
+  $("overrule").addEventListener("click", () => S.overrule && S.overrule());
+}
+// four meanings: the group's own, plus look-alike fillers; wrong picks shake and stay crossed out
+function lookChoose(t, lead) {
+  const R = S.round, k = t.k;
+  const pool = shuffle(t.g.filter(x => x !== k).concat(shuffle((famOf[k] ? F[famOf[k]].k : []).filter(x => !t.g.includes(x) && K[x]))));
+  const opts = [k];
+  for (const x of pool) if (opts.length < 4 && !opts.some(o => overlaps(K[o][0], K[x][0]))) opts.push(x);
+  for (const x of shuffle(Object.keys(K)).slice(0, 80)) if (opts.length < 4 && !opts.some(o => o === x || overlaps(K[o][0], K[x][0]))) opts.push(x);
+  R.opts = shuffle(opts);
+  S.phase = "lchoose"; S.locked = false; S.overrule = null;
   card(`
-    <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> means <b>${kAnswer(k)}</b>.
-      ${other ? `“${guess.replace(/</g, "&lt;")}” is <span class="g">${other}</span>.` : guess ? `You typed “${guess.replace(/</g, "&lt;")}”.` : ""}</p>
-    ${other ? compareHTML(k, other) : groupHTML(t.g, k)}
-    <div class="row">
-      <button class="next" type="button" id="cont" data-focus>Continue</button>
-      ${guess && !other ? `<button class="ghost" type="button" id="overrule">I was right (r)</button>` : ""}
-    </div>`);
-  if (other) S.overrule = null;
-  S.afterReview = done;
-  $("cont").addEventListener("click", continueReview);
-  if (guess && !other) $("overrule").addEventListener("click", () => S.overrule && S.overrule());
+    <p class="q">what does it mean? <span class="typed-tag">pick it</span></p>
+    <div class="glyph">${k}</div>
+    ${lead ? `<p class="miss-note">✗ ${lead} Pick from these.</p>` : ""}
+    <div class="choices" role="group" aria-label="Meanings">
+      ${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="txt">${K[x][0]}</span></button>`).join("")}
+    </div>
+    <div id="lmiss"></div>
+    <p class="check" id="check"></p>`);
+  if (lead) shake(document.querySelector("#card .step"));
+  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerLookChoose(+b.dataset.i)));
+}
+function answerLookChoose(i) {
+  const R = S.round, t = R.tiles[R.i];
+  if (S.phase !== "lchoose" || S.locked || i >= R.opts.length) return;
+  const x = R.opts[i], ok = x === t.k, btn = document.querySelectorAll(".choice")[i];
+  record({ step: "look_again", k: t.k, picked: x, ok, how: "choice" });
+  if (ok) { btn.classList.add("right"); return lookRight(t); }
+  if (btn.classList.contains("wrong")) return;
+  btn.classList.add("wrong"); shake(btn);
+  $("lmiss").innerHTML = `<p class="miss-note">✗ “${K[x][0]}” is ${x}. Keep going.</p>${t.g.includes(x) ? clueHTML(t.k, x) : ""}`;
 }
 // the other way round: the meaning, and which of the group it is
 function lookRev(t) {
@@ -1675,31 +1721,30 @@ function lookRev(t) {
     <div class="choices fam" role="group" aria-label="Kanji">
       ${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${x}</span></button>`).join("")}
     </div>
+    <div id="lmiss"></div>
     <p class="check" id="check"></p>`);
   document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerLookRev(+b.dataset.i)));
 }
 function answerLookRev(i) {
   const R = S.round, t = R.tiles[R.i];
   if (S.phase !== "lrev" || S.locked || i >= R.opts.length) return;
-  S.locked = true;
-  const picked = R.opts[i], ok = picked === t.k;
-  record({ step: "look_reverse", k: t.k, picked, ok });
-  R.results.push({ k: t.k, rev: true, ok, retry: !!t.retry, gi: t.gi });
+  const picked = R.opts[i], ok = picked === t.k, btn = document.querySelectorAll(".choice")[i];
+  if (btn.classList.contains("wrong")) return;
+  record({ step: "look_reverse", k: t.k, picked, ok, ...(t.tries ? { again: true } : {}) });
+  if (!t.tries) {
+    R.results.push({ k: t.k, rev: true, ok, retry: !!t.retry, gi: t.gi });
+    if (ok) { S.streak++; bumpBest(); } else { S.streak = 0; t.missed = true; }
+  }
   if (ok) {
-    S.streak++; bumpBest();
-    document.querySelectorAll(".choice")[i].classList.add("right");
+    S.locked = true;
+    btn.classList.add("right");
     $("check").textContent = `✓ ${t.k}`;
     setTimeout(lookAdvance, 650);
-  } else {
-    S.streak = 0; t.missed = true;
-    S.phase = "review";
-    card(`
-      <p class="verdict"><span class="no">✗</span> <b>${K[t.k][0]}</b> is <span class="g">${t.k}</span>; <span class="g">${picked}</span> is ${K[picked][0]}.</p>
-      ${compareHTML(t.k, picked)}
-      <button class="next" type="button" id="cont" data-focus>Continue</button>`);
-    S.afterReview = lookAdvance;
-    $("cont").addEventListener("click", continueReview);
+    return;
   }
+  t.tries = (t.tries || 0) + 1;
+  btn.classList.add("wrong"); shake(btn);
+  $("lmiss").innerHTML = `<p class="miss-note">✗ <span class="g">${picked}</span> means ${K[picked][0]}. Keep going.</p>${clueHTML(t.k, picked).replace(/<b>this one<\/b>/, "")}`;
 }
 function lookAdvance() {
   const R = S.round, t = R.tiles[R.i];
@@ -1708,7 +1753,7 @@ function lookAdvance() {
   if (t.missed && !t.retry && (t.kind === "type" || t.kind === "rev")) {
     let end = R.i + 1;
     while (end < R.tiles.length && R.tiles[end].gi === t.gi) end++;
-    R.tiles.splice(end, 0, { ...t, missed: false, retry: true });
+    R.tiles.splice(end, 0, { ...t, missed: false, retry: true, tries: 0 });
   }
   R.i++;
   R.i < R.tiles.length ? lookTile() : endLookalikes();
@@ -1975,9 +2020,13 @@ function renderHome() {
   const next = planDecide(); S.planLevels = null;
   $("plan-note").textContent = `Chooses the next exercise for you: due reviews first, lookalikes right after a mix-up, your anchor words, then new kanji (${newLeft()} left today at ${targetLevel().toUpperCase()}). Next: ${next.label}.`;
   const fk = focusKanji();
-  if (S.mode === "build") {
-    $("due-note").textContent = `${fk.length} due or hard at ${S.level.toUpperCase()} (${fk.filter(isHard).length} hard); ` +
-      `${Math.min(newLeft(), newCandidates().length)} new kanji left today. Build rounds take due kanji first, then new ones: studied, then built from memory.`;
+  if (S.mode === "knew") {
+    $("due-note").textContent = `${newCandidates().length} kanji not started at ${S.level.toUpperCase()}; ${newLeft()} more today keeps your reviews manageable. ` +
+      `Each is studied, then built from memory three kanji later: that test starts its schedule.`;
+  } else if (S.mode === "build") {
+    $("due-note").textContent = `${fk.length} due or hard at ${S.level.toUpperCase()} (${fk.filter(isHard).length} hard). Review rebuilds each one: parts, sound part, meaning, then reading its word.`;
+  } else if (S.mode === "wnew") {
+    $("due-note").textContent = `${newWordsToLearn().length} words to learn at ${S.level.toUpperCase()}, anchor words of your kanji first. Each is studied, then tested a few words later.`;
   } else if (S.mode === "lookalikes") {
     const n = Object.keys(K).filter(k => inLevel(k) && lookLinks(k).length).length;
     $("due-note").textContent = `${n} kanji at ${S.level.toUpperCase()} with lookalikes, from your misses` +
@@ -2009,10 +2058,11 @@ chipGroup("g-level", Object.keys(LEVEL_SETS).map(l => [l, l.toUpperCase()]), S.l
 chipGroup("g-focus", [["due", "Due & hard"], ["all", "Everything"]], S.focus, v => { S.focus = v; store.set("focus", v); renderHome(); });
 const pickMode = v => {
   S.mode = v; store.set("mode", v);
-  document.querySelectorAll("#g-mode .chip, #g-more .chip").forEach(c => c.setAttribute("aria-pressed", c.dataset.v === v));
+  document.querySelectorAll("#g-mode .chip, #g-words .chip, #g-more .chip").forEach(c => c.setAttribute("aria-pressed", c.dataset.v === v));
   renderHome();
 };
-chipGroup("g-mode", [["build", "Build (new + review)"], ["lookalikes", "Lookalikes"]].concat(HAS_WORDS ? [["words", "Words"]] : []), S.mode, pickMode);
+chipGroup("g-mode", [["knew", "New"], ["build", "Review"], ["lookalikes", "Lookalikes"]], S.mode, pickMode);
+if (HAS_WORDS) chipGroup("g-words", [["wnew", "New"], ["words", "Review"]], S.mode, pickMode);
 chipGroup("g-more", [["families", "Families"], ["cousins", "Cousins"]].concat(HAS_SOUND ? [["sounds", "Sounds"]] : []), S.mode, pickMode);
 chipGroup("g-mean", [["true", "On"], ["false", "Off"]], S.meanings, v => { S.meanings = v === "true"; store.set("meanings", S.meanings); });
 $("start").addEventListener("click", startRound);
@@ -2026,6 +2076,7 @@ document.addEventListener("keydown", e => {
   if (S.phase === "lpick" && /^[1-9]$/.test(e.key)) { e.preventDefault(); toggleLookPart(+e.key - 1); return; }
   if (S.phase === "lpick" && e.key === "Enter") { e.preventDefault(); checkLookPick(); return; }
   if (S.phase === "lcompare" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); lookAdvance(); return; }
+  if (S.phase === "lchoose" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerLookChoose(+e.key - 1); return; }
   if (S.phase === "lrev" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerLookRev(+e.key - 1); return; }
   if (S.phase === "review" && e.key === "r" && S.overrule) { e.preventDefault(); S.overrule(); return; }
   if (S.phase === "review" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueReview(); return; }
@@ -2052,7 +2103,7 @@ document.addEventListener("keydown", e => {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerReading(+e.key - 1); }
   } else if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick"].includes(S.phase)) {
+  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick", "lchoose"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });
