@@ -81,6 +81,15 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .choice .txt { font-size: 1rem; overflow-wrap: anywhere; }
 .choice.right { border-color: var(--good); background: var(--good-bg); }
 .choice.wrong { border-color: var(--bad); background: var(--bad-bg); }
+.pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; width: 100%; }
+.ptile { display: grid; justify-items: center; gap: 2px; background: var(--sheet); border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 6px 8px; cursor: pointer; position: relative; }
+.ptile .key { position: absolute; top: 4px; left: 7px; font-family: var(--mono); font-size: .66rem; color: var(--muted); }
+.ptile .pg { font-family: var(--glyph); font-weight: 700; font-size: 1.9rem; line-height: 1.1; }
+.ptile .pm { font-size: .74rem; color: var(--muted); text-align: center; overflow-wrap: anywhere; }
+.ptile[aria-pressed=true] { border-color: var(--indigo); box-shadow: 0 0 0 2px var(--indigo); }
+.ptile:hover { border-color: var(--indigo); }
+.part.missed { border-color: var(--good); color: var(--good); font-weight: 600; }
+.part.extra { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }
 .check { font-size: 1rem; font-weight: 600; color: var(--good); min-height: 1.5em; margin: 0; }
 
 /* ---------- feedback on a miss */
@@ -128,11 +137,12 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
   <section class="home" id="home">
     <div>
       <h1><span class="jp">家系</span>Kanji Family Builder</h1>
-      <p class="lede">Put each kanji back into its family by finding the part it's built on, then say what it means. In Sounds mode, find the part that gives its reading, then pick the reading. One question at a time.</p>
+      <p class="lede">Put each kanji back into its family by finding the part it's built on, then say what it means. In Sounds mode, find the part that gives its reading, then pick the reading. Build mode takes one kanji apart completely: all its parts, which one gives the sound, its meaning and its reading. One question at a time.</p>
     </div>
     <div class="stats">
       <div><b id="s-built">0</b><span>families rebuilt</span></div>
       <div id="s-snd-box"><b id="s-snd">0</b><span>sound families rebuilt</span></div>
+      <div><b id="s-kanji">0</b><span>kanji fully built</span></div>
       <div><b id="s-best">0</b><span>best streak</span></div>
     </div>
     <div class="setting"><span>levels</span><div class="chips" id="g-level"></div></div>
@@ -178,6 +188,7 @@ const S = {
   meanings: store.get("meanings", true),
   built: new Set(store.get("built", [])),
   builtSound: new Set(store.get("builtSound", [])),
+  builtKanji: new Set(store.get("builtKanji", [])),
   best: store.get("best", 0),
   streak: 0,
   round: null,
@@ -188,7 +199,9 @@ const S = {
 if (!LEVEL_SETS[S.level]) S.level = "n5–n4";
 const SND = D.sound || {};
 const HAS_SOUND = Object.keys(SND).length > 0;
-if (!["families", "cousins", "sounds"].includes(S.mode) || (S.mode === "sounds" && !HAS_SOUND)) S.mode = "families";
+if (!["families", "cousins", "sounds", "build"].includes(S.mode) || (S.mode === "sounds" && !HAS_SOUND)) S.mode = "families";
+const famOf = {};
+for (const [f, v] of Object.entries(F)) for (const k of v.k) famOf[k] = f;
 const isSound = () => S.mode === "sounds";
 const famMembers = f => isSound() ? SND[f].k : F[f].k;
 const famLabel = f => isSound() ? SND[f].r : (F[f].m || "");
@@ -214,6 +227,7 @@ const dbReady = (window.claude && window.claude.use ? window.claude.use("db") : 
       const p = snap.data();
       (p.built || []).forEach(f => S.built.add(f));
       (p.builtSound || []).forEach(f => S.builtSound.add(f));
+      (p.builtKanji || []).forEach(k => S.builtKanji.add(k));
       if ((p.best || 0) > S.best) S.best = p.best;
       store.set("built", [...S.built]); store.set("best", S.best);
       renderHome();
@@ -232,7 +246,7 @@ function flushResults() {
   const db = results.db;
   if (!db) return;
   const body = { started: results.started, updated: new Date().toISOString(), events: results.events.slice() };
-  const progress = { built: [...S.built], builtSound: [...S.builtSound], best: S.best, updated: body.updated };
+  const progress = { built: [...S.built], builtSound: [...S.builtSound], builtKanji: [...S.builtKanji], best: S.best, updated: body.updated };
   const docId = results.id + (results.part ? "-" + results.part : "");
   // a very long visit moves on to a fresh document once this one is saved (documents cap at 256 KiB)
   if (results.events.length > 1500) { results.part++; results.events = []; }
@@ -306,7 +320,7 @@ function meaningOptions(k) {
   const R = S.round, right = K[k][0];
   const fam = R.tiles[R.i].f;
   const pools = [
-    shuffle(F[fam].k.filter(x => x !== k)),
+    shuffle((F[fam] ? F[fam].k : []).filter(x => x !== k)),
     shuffle(R.tiles.map(t => t.k).filter(x => x !== k)),
     shuffle(Object.keys(K).filter(x => K[x][1] === K[k][1] && x !== k)).slice(0, 60),
   ];
@@ -331,12 +345,13 @@ function card(html) {
 }
 function renderBar() {
   const R = S.round;
-  $("b-pos").textContent = `${Math.min(R.i + 1, R.tiles.length)} / ${R.tiles.length}`;
+  $("b-pos").textContent = `${Math.min(R.i + 1, R.tiles.length)} / ${R.tiles.length}` + (R.build && R.steps ? ` · step ${R.si + 1} of ${R.steps.length}` : "");
   $("b-track").style.width = `${100 * R.i / R.tiles.length}%`;
   $("b-streak").textContent = S.streak ? `streak ${S.streak}` : "";
 }
 
 function startRound() {
+  if (S.mode === "build") return startBuild();
   const { fams, parent } = pickFamilies();
   show("play");
   if (fams.length < 2) {
@@ -535,6 +550,247 @@ function compareHTML(k, other) {
   return `<div class="compare">${row(k, pa, pb, "right", "this one")}${row(other, pb, pa, "picked", "you picked")}</div>`;
 }
 
+// ======================= Build mode: every part of one kanji, then its meaning and reading
+const partUsers = {};
+for (const [k, v] of Object.entries(K)) for (const c of (v[3] || [])) (partUsers[c] = partUsers[c] || []).push(k);
+const ALL_PARTS = Object.keys(partUsers).filter(c => partUsers[c].length >= 3);
+
+function buildSteps(k) {
+  const steps = ["parts"];
+  if (Object.values((D.roles && D.roles[k]) || {}).includes("s")) steps.push("sound");
+  steps.push("meaning");
+  if ((K[k][4] || []).length) steps.push("reading");
+  return steps;
+}
+function buildReading(k) {
+  for (const f of Object.keys(SND)) if (SND[f].a[k]) return SND[f].a[k];
+  return K[k][4][0];
+}
+function pickBuildKanji() {
+  const lv = LEVEL_SETS[S.level];
+  const cands = Object.keys(K).filter(k => lv.includes(K[k][1]) && (K[k][3] || []).length >= 2);
+  const fresh = cands.filter(k => !S.builtKanji.has(k));
+  const pool = fresh.length >= 5 ? fresh : cands;
+  // mostly kanji you know or are learning (you can build what you've met), a few new ones
+  return shuffle(pool.slice()).sort((a, b) => (K[a][2] === "new") - (K[b][2] === "new") + (Math.random() - .5) * 1.4).slice(0, 5);
+}
+function startBuild() {
+  show("play");
+  const ks = pickBuildKanji();
+  if (!ks.length) {
+    S.phase = null;
+    card(`<p class="verdict">Nothing to build at this level.</p><button class="next" type="button" id="home-btn" data-focus>Back</button>`);
+    $("home-btn").addEventListener("click", goHome);
+    return;
+  }
+  S.round = { build: true, fams: [], parent: null, tiles: ks.map(k => ({ k, f: famOf[k] })), i: 0, si: 0,
+              results: [], missedFams: new Set() };
+  buildTileStart();
+}
+function buildTileStart() {
+  const R = S.round, { k } = R.tiles[R.i];
+  R.steps = buildSteps(k); R.si = 0;
+  R.results.push({ k, parts: null, sound: null, mean: null, reading: null });
+  buildRun();
+}
+function buildRun() {
+  const R = S.round, step = R.steps[R.si];
+  if (step === "parts") return partsStep();
+  if (step === "sound") return soundPartStep();
+  if (step === "meaning") return meaningStep();
+  return buildReadingStep();
+}
+function buildAdvance() {
+  const R = S.round;
+  R.si++;
+  if (R.si < R.steps.length) return buildRun();
+  const r = R.results[R.results.length - 1];
+  if (["parts", "sound", "mean", "reading"].every(x => r[x] !== false)) S.builtKanji.add(r.k);
+  R.i++;
+  R.i < R.tiles.length ? buildTileStart() : endBuild();
+}
+
+// step 1: which parts is it made of? (choose all)
+function partOptions(k) {
+  const mine = K[k][3];
+  const near = new Set();
+  for (const c of mine) for (const sib of (partUsers[c] || []).slice(0, 40)) for (const p of K[sib][3]) near.add(p);
+  if (famOf[k]) for (const sib of F[famOf[k]].k) for (const p of (K[sib][3] || [])) near.add(p);
+  const decoys = shuffle([...near].filter(p => !mine.includes(p) && D.parts[p] !== undefined));
+  const fill = shuffle(ALL_PARTS.filter(p => !mine.includes(p) && !decoys.includes(p)));
+  const want = Math.max(6, Math.min(8, mine.length + 5));
+  return shuffle(mine.concat(decoys.slice(0, want - mine.length - 1), fill).slice(0, want));
+}
+function partsStep() {
+  const R = S.round, { k } = R.tiles[R.i];
+  R.opts = partOptions(k); R.sel = new Set();
+  S.phase = "parts"; S.locked = false;
+  renderBar();
+  card(`
+    <p class="q">which parts is it made of? <span style="text-transform:none;letter-spacing:0">(pick all of them)</span></p>
+    <div class="glyph">${k}</div>
+    <p class="hint">${K[k][2] === "new" ? `new to you: ${K[k][0]}` : ""}</p>
+    <div class="pgrid" role="group" aria-label="Parts">
+      ${R.opts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${c}</span><span class="pm">${D.parts[c] || ""}</span></button>`).join("")}
+    </div>
+    <button class="next" type="button" id="check-parts">Check</button>
+    <p class="sub">tap or press 1–${R.opts.length}, then Enter</p>`);
+  document.querySelectorAll(".ptile").forEach(b => b.addEventListener("click", () => togglePart(+b.dataset.i)));
+  $("check-parts").addEventListener("click", checkParts);
+}
+function togglePart(i) {
+  const R = S.round;
+  if (S.phase !== "parts" || S.locked || i >= R.opts.length) return;
+  R.sel.has(i) ? R.sel.delete(i) : R.sel.add(i);
+  const b = document.querySelector(`.ptile[data-i="${i}"]`);
+  if (b) b.setAttribute("aria-pressed", R.sel.has(i));
+}
+function checkParts() {
+  const R = S.round;
+  if (S.phase !== "parts" || S.locked) return;
+  S.locked = true;
+  const { k } = R.tiles[R.i], mine = K[k][3];
+  const picked = [...R.sel].map(i => R.opts[i]);
+  const ok = picked.length === mine.length && mine.every(c => picked.includes(c));
+  R.results[R.results.length - 1].parts = ok;
+  record({ step: "build_parts", k, status: K[k][2], right: mine, picked, ok });
+  if (ok) {
+    S.streak++; bumpBest();
+    card(`<p class="q">which parts is it made of?</p><div class="glyph">${k}</div>
+      ${partsRow(k, "right", "built from")}<p class="check">✓</p>`);
+    setTimeout(buildAdvance, 650);
+  } else {
+    S.streak = 0;
+    const missed = mine.filter(c => !picked.includes(c)), extra = picked.filter(c => !mine.includes(c));
+    S.phase = "review";
+    card(`
+      <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> is built from ${mine.map(c => `<span class="g">${c}</span>`).join(" + ")}</p>
+      <div class="compare"><div class="crow right"><span class="cg">${k}</span><span class="cm"><b>its parts</b>${K[k][2] === "new" ? K[k][0] : ""}</span>
+        <span class="parts">${mine.map(c => partChip(k, c, missed.includes(c) ? "missed" : "")).join("")}${extra.map(c => `<span class="part extra"><span class="pg">${c}</span>${D.parts[c] || ""}</span>`).join("")}</span></div></div>
+      <p class="sub">${missed.length ? `green: the part${missed.length > 1 ? "s" : ""} you missed` : ""}${missed.length && extra.length ? " · " : ""}${extra.length ? "struck out: not in it" : ""}</p>
+      <button class="next" type="button" id="cont" data-focus>Continue</button>`);
+    S.afterReview = buildAdvance;
+    $("cont").addEventListener("click", continueReview);
+  }
+}
+
+// step 2: which part gives its sound?
+function soundPartStep() {
+  const R = S.round, { k } = R.tiles[R.i];
+  R.opts = K[k][3].slice();
+  S.phase = "soundpart"; S.locked = false;
+  renderBar();
+  card(`
+    <p class="q">which part gives its sound?</p>
+    <div class="glyph">${k}</div>
+    <p class="hint"></p>
+    <div class="choices fam" role="group" aria-label="Parts">
+      ${R.opts.map((c, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${c}</span><span class="m">${D.parts[c] || ""}${D.partOn && D.partOn[c] ? " · " + D.partOn[c] : ""}</span></button>`).join("")}
+    </div>
+    <p class="check" id="check"></p>`);
+  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerSoundPart(+b.dataset.i)));
+}
+function answerSoundPart(i) {
+  const R = S.round;
+  if (S.phase !== "soundpart" || S.locked || i >= R.opts.length) return;
+  S.locked = true;
+  const { k } = R.tiles[R.i];
+  const right = Object.keys(D.roles[k]).find(c => D.roles[k][c] === "s");
+  const ok = R.opts[i] === right;
+  R.results[R.results.length - 1].sound = ok;
+  record({ step: "build_sound", k, status: K[k][2], right, picked: R.opts[i], ok });
+  if (ok) {
+    S.streak++; bumpBest();
+    document.querySelectorAll(".choice")[i].classList.add("right");
+    $("check").textContent = `✓ ${right}${D.partOn && D.partOn[right] ? " " + D.partOn[right] : ""}`;
+    setTimeout(buildAdvance, 600);
+  } else {
+    S.streak = 0;
+    S.phase = "review";
+    card(`
+      <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> gets its sound from <span class="g">${right}</span>${D.partOn && D.partOn[right] ? " (" + D.partOn[right] + ")" : ""}; <span class="g">${R.opts[i]}</span> carries the meaning</p>
+      ${partsRow(k, "right", "its parts")}
+      <button class="next" type="button" id="cont" data-focus>Continue</button>`);
+    S.afterReview = buildAdvance;
+    $("cont").addEventListener("click", continueReview);
+  }
+}
+
+// step 4: how is it read? (its on'yomi)
+function buildReadingOptions(k) {
+  const right = buildReading(k), own = new Set(K[k][4] || []);
+  const picked = [];
+  const add = r => { if (picked.length < 3 && r && !own.has(r) && unvoice(r) !== unvoice(right) && !picked.some(o => unvoice(o) === unvoice(r))) picked.push(r); };
+  for (const t of S.round.tiles) if (t.k !== k && (K[t.k][4] || []).length) add(buildReading(t.k));
+  for (const c of K[k][3]) if (D.partOn && D.partOn[c]) add(D.partOn[c]);
+  for (const x of shuffle(Object.keys(K)).slice(0, 80)) if ((K[x][4] || []).length) add(K[x][4][0]);
+  return shuffle([right, ...picked]);
+}
+function buildReadingStep() {
+  const R = S.round, { k } = R.tiles[R.i];
+  R.opts = buildReadingOptions(k);
+  S.phase = "breading"; S.locked = false;
+  renderBar();
+  card(`
+    <p class="q">how is it read?</p>
+    <div class="glyph">${k}</div>
+    <p class="hint">${K[k][0]} · its on'yomi</p>
+    <div class="choices" role="group" aria-label="Readings">
+      ${R.opts.map((r, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="txt">${r}</span></button>`).join("")}
+    </div>
+    <p class="check" id="check"></p>`);
+  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerBuildReading(+b.dataset.i)));
+}
+function answerBuildReading(i) {
+  const R = S.round;
+  if (S.phase !== "breading" || S.locked || i >= R.opts.length) return;
+  S.locked = true;
+  const { k } = R.tiles[R.i], right = buildReading(k), ok = R.opts[i] === right;
+  R.results[R.results.length - 1].reading = ok;
+  record({ step: "build_reading", k, status: K[k][2], right, picked: R.opts[i], ok });
+  if (ok) {
+    S.streak++; bumpBest();
+    document.querySelectorAll(".choice")[i].classList.add("right");
+    $("check").textContent = `✓ ${right}`;
+    setTimeout(buildAdvance, 650);
+  } else {
+    S.streak = 0;
+    const snd = Object.keys((D.roles && D.roles[k]) || {}).find(c => D.roles[k][c] === "s");
+    S.phase = "review";
+    card(`
+      <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> reads <b>${right}</b>${snd ? `, from its sound part <span class="g">${snd}</span>` : ""}. You picked ${R.opts[i]}</p>
+      ${partsRow(k, "right", "its parts")}
+      <button class="next" type="button" id="cont" data-focus>Continue</button>`);
+    S.afterReview = buildAdvance;
+    $("cont").addEventListener("click", continueReview);
+  }
+}
+
+function endBuild() {
+  const R = S.round;
+  const full = R.results.filter(r => ["parts", "sound", "mean", "reading"].every(x => r[x] !== false));
+  store.set("builtKanji", [...S.builtKanji]);
+  record({ step: "round", built: full.map(r => r.k), kanji: R.tiles.map(t => t.k) });
+  flushResults();
+  const mark = v => v === null ? "" : v ? "✓" : "✗";
+  S.phase = "summary";
+  S.summaryAt = Date.now();
+  renderBar();
+  $("b-track").style.width = "100%";
+  card(`
+    <p class="q">round done</p>
+    <p class="verdict">${full.length} of ${R.results.length} kanji fully built</p>
+    <div class="fams">${R.results.map(r => `<div class="fam ${full.includes(r) ? "built" : ""}"><b>${r.k}</b>
+      <span>parts ${mark(r.parts)}${r.sound !== null ? " · sound " + mark(r.sound) : ""} · meaning ${mark(r.mean)}${r.reading !== null ? " · reading " + mark(r.reading) : ""}</span></div>`).join("")}</div>
+    <div class="row">
+      <button class="next" type="button" id="again" data-focus>Next round</button>
+      <button class="ghost" type="button" id="home-btn">Back to start</button>
+    </div>
+    <p class="sub">Enter for the next round</p>`);
+  $("again").addEventListener("click", startRound);
+  $("home-btn").addEventListener("click", goHome);
+}
+
 // one exit from any feedback screen, whether by click, Enter on the button, or Enter anywhere
 function continueReview() {
   if (S.phase !== "review") return;
@@ -546,6 +802,7 @@ function continueReview() {
 
 function nextTile() {
   const R = S.round;
+  if (R.build) return buildAdvance();
   R.i++;
   R.i < R.tiles.length ? familyStep() : endRound();
 }
@@ -595,6 +852,7 @@ function renderHome() {
   $("s-best").textContent = S.best;
   $("s-snd").textContent = `${S.builtSound.size} / ${Object.keys(SND).length}`;
   $("s-snd-box").hidden = !HAS_SOUND;
+  $("s-kanji").textContent = S.builtKanji.size;
   const order = Object.keys(F).sort((a, b) => F[b].k.length - F[a].k.length || a.localeCompare(b));
   $("dots").innerHTML = order.map(f => `<i class="${S.built.has(f) ? "built" : ""}" title="${f} ${F[f].m || ""}: ${F[f].k.join("")}"></i>`).join("");
   $("map-note").textContent = `${S.built.size} of ${order.length} families rebuilt: every kanji in it sorted, and its meaning given where asked, in one round. Each square is a family, largest first.`;
@@ -611,7 +869,7 @@ function chipGroup(id, options, current, onPick) {
 }
 
 chipGroup("g-level", Object.keys(LEVEL_SETS).map(l => [l, l.toUpperCase()]), S.level, v => { S.level = v; store.set("level", v); });
-chipGroup("g-mode", [["families", "Families"], ["cousins", "Cousins (harder)"]].concat(HAS_SOUND ? [["sounds", "Sounds (readings)"]] : []),
+chipGroup("g-mode", [["families", "Families"], ["cousins", "Cousins (harder)"]].concat(HAS_SOUND ? [["sounds", "Sounds (readings)"]] : [], [["build", "Build (whole kanji)"]]),
   S.mode, v => { S.mode = v; store.set("mode", v); });
 chipGroup("g-mean", [["true", "On"], ["false", "Off"]], S.meanings, v => { S.meanings = v === "true"; store.set("meanings", S.meanings); });
 $("start").addEventListener("click", startRound);
@@ -622,6 +880,10 @@ document.addEventListener("keydown", e => {
   if (S.phase === "review" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueReview(); return; }
   // a quick second Enter from the last feedback screen shouldn't skip past the summary
   if (S.phase === "summary" && e.key === "Enter") { e.preventDefault(); if (Date.now() - S.summaryAt > 500) startRound(); return; }
+  if (S.phase === "parts" && /^[1-9]$/.test(e.key)) { e.preventDefault(); togglePart(+e.key - 1); return; }
+  if (S.phase === "parts" && e.key === "Enter") { e.preventDefault(); checkParts(); return; }
+  if (S.phase === "soundpart" && /^[1-9]$/.test(e.key)) { e.preventDefault(); answerSoundPart(+e.key - 1); return; }
+  if (S.phase === "breading" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerBuildReading(+e.key - 1); return; }
   if (S.phase === "family" && /^[1-4]$/.test(e.key)) {
     const f = S.round.fams[+e.key - 1];
     if (f) { e.preventDefault(); answerFamily(f); }
@@ -629,7 +891,7 @@ document.addEventListener("keydown", e => {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerReading(+e.key - 1); }
   } else if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (S.phase === "family" || S.phase === "meaning" || S.phase === "reading") {
+  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });
