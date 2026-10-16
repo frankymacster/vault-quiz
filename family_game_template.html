@@ -163,6 +163,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
       <div><b id="s-best">0</b><span>best streak</span></div>
     </div>
     <div class="setting"><span>levels</span><div class="chips" id="g-level"></div></div>
+    <div class="setting"><span>focus</span><div class="chips" id="g-focus"></div><span class="note" id="due-note"></span></div>
     <div class="setting"><span>mode</span><div class="chips" id="g-mode"></div></div>
     <div class="setting"><span>meanings</span><div class="chips" id="g-mean"></div></div>
     <details class="guide" id="guide">
@@ -217,6 +218,8 @@ const S = {
   builtSound: new Set(store.get("builtSound", [])),
   builtKanji: new Set(store.get("builtKanji", [])),
   learnedSound: new Set(store.get("learnedSound", [])),
+  focus: store.get("focus", "due"),
+  reviewed: store.get("reviewed", {}),
   best: store.get("best", 0),
   streak: 0,
   round: null,
@@ -228,6 +231,17 @@ if (!LEVEL_SETS[S.level]) S.level = "n5–n4";
 const SND = D.sound || {};
 const HAS_SOUND = Object.keys(SND).length > 0;
 if (!["families", "cousins", "sounds", "build"].includes(S.mode) || (S.mode === "sounds" && !HAS_SOUND)) S.mode = "families";
+// ---- focus: the kanji your quiz has due, and your hard ones (snapshot from the vault at build time)
+const SRS = D.srs || {};
+const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const isDue = k => SRS[k] && SRS[k][0] <= todayISO() && S.reviewed[k] !== todayISO();
+const isHard = k => SRS[k] && SRS[k][1] >= 3 && S.reviewed[k] !== todayISO();
+const inLevel = k => K[k] && LEVEL_SETS[S.level].includes(K[k][1]);
+function focusKanji() {
+  return Object.keys(SRS).filter(k => inLevel(k) && (isDue(k) || isHard(k)))
+    .sort((a, b) => isHard(b) - isHard(a) || SRS[a][0].localeCompare(SRS[b][0]));
+}
+const focusing = () => S.focus === "due" && focusKanji().length > 0;
 const famOf = {};
 for (const [f, v] of Object.entries(F)) for (const k of v.k) famOf[k] = f;
 const isSound = () => S.mode === "sounds";
@@ -269,7 +283,9 @@ function setSaved(on, msg) {
                               : "Scores are saved in this browser only.");
 }
 function record(e) {
-  results.events.push({ t: Math.round(Date.now() / 1000), level: S.level, mode: S.mode, ...e });
+  const tile = S.round && S.round.tiles && S.round.tiles[S.round.i];
+  results.events.push({ t: Math.round(Date.now() / 1000), level: S.level, mode: S.mode, focus: S.focus,
+                        ...(tile && tile.retry ? { retry: true } : {}), ...e });
 }
 function flushResults() {
   const db = results.db;
@@ -294,7 +310,24 @@ const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = rnd(i 
 // ---- choosing a round
 function tilesOf(f) {
   const lv = LEVEL_SETS[S.level];
-  return famMembers(f).filter(k => k !== f && K[k] && lv.includes(K[k][1]));
+  const ks = famMembers(f).filter(k => k !== f && K[k] && lv.includes(K[k][1]));
+  if (!focusing()) return ks;
+  const fk = new Set(focusKanji());
+  return ks.filter(k => fk.has(k)).concat(ks.filter(k => !fk.has(k)));
+}
+// families (shape or sound) holding the most focus kanji, greedily, no kanji shared between them
+function focusFamilies(keys, membersOf) {
+  const fk = focusKanji(), fset = new Set(fk);
+  const out = [], seen = new Set();
+  const score = f => membersOf(f).filter(k => fset.has(k) && !seen.has(k)).length;
+  for (let n = 0; n < 4; n++) {
+    const best = keys.filter(f => !out.includes(f) && tilesOf(f).length && !membersOf(f).some(k => seen.has(k)))
+      .sort((a, b) => score(b) - score(a) || Math.random() - .5)[0];
+    if (!best || (score(best) === 0 && out.length >= 2)) break;
+    if (score(best) === 0 && !out.length) return [];
+    out.push(best); membersOf(best).forEach(k => seen.add(k));
+  }
+  return out;
 }
 function familiarity(f) {
   const ts = F[f].k;
@@ -302,6 +335,12 @@ function familiarity(f) {
 }
 // sound families with different sounds, so the reading step never offers two right answers
 function pickSoundFamilies() {
+  if (focusing()) {
+    const fams = focusFamilies(Object.keys(SND), f => SND[f].k);
+    const uniq = [], keys = new Set();
+    for (const f of fams) { const kk = unvoice(SND[f].r); if (!keys.has(kk)) { uniq.push(f); keys.add(kk); } }
+    if (uniq.length >= 2) { S.fellBack = false; return { fams: uniq, parent: null }; }
+  }
   const ok = shuffle(Object.keys(SND).filter(f => tilesOf(f).length >= 1));
   const fresh = ok.filter(f => !S.builtSound.has(f));
   const pool = fresh.length >= 3 ? fresh : ok;
@@ -317,7 +356,12 @@ function pickSoundFamilies() {
 }
 
 function pickFamilies() {
+  S.fellBack = S.focus === "due" && S.mode !== "cousins";
   if (isSound()) return pickSoundFamilies();
+  if (focusing() && S.mode === "families") {
+    const fams = focusFamilies(Object.keys(F), f => F[f].k);
+    if (fams.length >= 2) { S.fellBack = false; return { fams, parent: null }; }
+  }
   const ok = Object.keys(F).filter(f => tilesOf(f).length >= 1);
   const fresh = ok.filter(f => !S.built.has(f));
   const pool = fresh.length >= 3 ? fresh : ok;
@@ -376,7 +420,8 @@ function renderBar() {
   const R = S.round;
   $("b-pos").textContent = `${Math.min(R.i + 1, R.tiles.length)} / ${R.tiles.length}` + (R.build && R.steps ? ` · step ${R.si + 1} of ${R.steps.length}` : "");
   $("b-track").style.width = `${100 * R.i / R.tiles.length}%`;
-  $("b-streak").textContent = S.streak ? `streak ${S.streak}` : "";
+  const t = R.tiles[R.i];
+  $("b-streak").textContent = [t && t.retry ? "again" : "", R.notice || "", S.streak ? `streak ${S.streak}` : ""].filter(Boolean).join(" · ");
 }
 
 function startRound() {
@@ -390,7 +435,8 @@ function startRound() {
     return;
   }
   const tiles = shuffle(fams.flatMap(f => tilesOf(f).slice(0, 5).map(k => ({ k, f }))));
-  S.round = { fams, parent, tiles, i: 0, results: [], missedFams: new Set() };
+  S.round = { fams, parent, tiles, i: 0, results: [], missedFams: new Set(),
+              notice: S.fellBack ? "nothing due here: everything" : "" };
   isSound() ? teachThen(fams, null, familyStep) : familyStep();
 }
 
@@ -432,7 +478,7 @@ function answerFamily(f) {
     $("check").textContent = "✓";
     setTimeout(() => (ask ? second() : nextTile()), 450);
   } else {
-    S.streak = 0; R.missedFams.add(right);
+    S.streak = 0; R.missedFams.add(right); R.tiles[R.i].missed = true;
     // feedback screen: the meaning is withheld when it's about to be asked
     S.phase = "review";
     card(isSound() ? `
@@ -480,14 +526,15 @@ function answerMeaning(i) {
   const { k, f } = R.tiles[R.i];
   const right = K[k][0], other = R.opts[i].k, ok = other === k;
   R.results[R.results.length - 1].mean = ok;
-  record({ step: "meaning", k, status: K[k][2], picked: other, ok, options: R.opts.map(o => o.k) });
+  record({ step: "meaning", k, status: K[k][2], picked: other, ok, options: R.opts.map(o => o.k), due: !!isDue(k) });
+  if (ok && (isDue(k) || isHard(k))) { S.reviewed[k] = todayISO(); store.set("reviewed", S.reviewed); }
   if (ok) {
     S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
     $("check").textContent = `✓ ${right}`;
     setTimeout(nextTile, 650);
   } else {
-    S.streak = 0; R.missedFams.add(f);
+    S.streak = 0; R.missedFams.add(f); R.tiles[R.i].missed = true;
     S.phase = "review";
     card(`
       <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> means <b>${right}</b>. You picked the meaning of <span class="g">${other}</span></p>
@@ -535,13 +582,14 @@ function answerReading(i) {
   const right = reading(k, f), pick = R.opts[i], ok = pick.r === right;
   R.results[R.results.length - 1].mean = ok;
   record({ step: "reading", k, status: K[k][2], family: f, right, picked: pick.r, ok });
+  if (ok && isSound() && (isDue(k) || isHard(k))) { S.reviewed[k] = todayISO(); store.set("reviewed", S.reviewed); }
   if (ok) {
     S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
     $("check").textContent = `✓ ${right}, from ${f}`;
     setTimeout(nextTile, 700);
   } else {
-    S.streak = 0; R.missedFams.add(f);
+    S.streak = 0; R.missedFams.add(f); R.tiles[R.i].missed = true;
     S.phase = "review";
     card(`
       <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> reads <b>${right}</b>, from its sound part <span class="g">${f}</span>. You picked ${pick.r}${pick.f && pick.f !== f ? `, the sound of <span class="g">${pick.f}</span>` : ""}</p>
@@ -597,6 +645,11 @@ function buildReading(k) {
   return K[k][4][0];
 }
 function pickBuildKanji() {
+  S.fellBack = S.focus === "due";
+  if (focusing()) {
+    const fk = focusKanji().filter(k => (K[k][3] || []).length >= 2);
+    if (fk.length) { S.fellBack = false; return fk.slice(0, 5); }
+  }
   const lv = LEVEL_SETS[S.level];
   const cands = Object.keys(K).filter(k => lv.includes(K[k][1]) && (K[k][3] || []).length >= 2);
   const fresh = cands.filter(k => !S.builtKanji.has(k));
@@ -614,7 +667,7 @@ function startBuild() {
     return;
   }
   S.round = { build: true, fams: [], parent: null, tiles: ks.map(k => ({ k, f: famOf[k] })), i: 0, si: 0,
-              results: [], missedFams: new Set() };
+              results: [], missedFams: new Set(), notice: S.fellBack ? "nothing due here: everything" : "" };
   buildTileStart();
 }
 function buildTileStart() {
@@ -638,6 +691,8 @@ function buildAdvance() {
   if (R.si < R.steps.length) return buildRun();
   const r = R.results[R.results.length - 1];
   if (["parts", "sound", "mean", "reading"].every(x => r[x] !== false)) S.builtKanji.add(r.k);
+  else R.tiles[R.i].missed = true;
+  requeueIfMissed(R);
   R.i++;
   R.i < R.tiles.length ? buildTileStart() : endBuild();
 }
@@ -883,9 +938,14 @@ function continueReview() {
   next();
 }
 
+function requeueIfMissed(R) {
+  const t = R.tiles[R.i];
+  if (t.missed && !t.retry) R.tiles.splice(Math.min(R.tiles.length, R.i + 4), 0, { k: t.k, f: t.f, retry: true });
+}
 function nextTile() {
   const R = S.round;
   if (R.build) return buildAdvance();
+  requeueIfMissed(R);
   R.i++;
   R.i < R.tiles.length ? familyStep() : endRound();
 }
@@ -936,6 +996,10 @@ function renderHome() {
   $("s-snd").textContent = `${S.builtSound.size} / ${Object.keys(SND).length}`;
   $("s-snd-box").hidden = !HAS_SOUND;
   $("s-kanji").textContent = S.builtKanji.size;
+  const fk = focusKanji();
+  $("due-note").textContent = Object.keys(SRS).length
+    ? `${fk.length} due or hard at ${S.level.toUpperCase()} (${fk.filter(isHard).length} hard), from your quiz schedule as of ${D.generated}`
+    : "";
   const order = Object.keys(F).sort((a, b) => F[b].k.length - F[a].k.length || a.localeCompare(b));
   $("dots").innerHTML = order.map(f => `<i class="${S.built.has(f) ? "built" : ""}" title="${f} ${F[f].m || ""}: ${F[f].k.join("")}"></i>`).join("");
   $("map-note").textContent = `${S.built.size} of ${order.length} families rebuilt: every kanji in it sorted, and its meaning given where asked, in one round. Each square is a family, largest first.`;
@@ -951,7 +1015,8 @@ function chipGroup(id, options, current, onPick) {
   });
 }
 
-chipGroup("g-level", Object.keys(LEVEL_SETS).map(l => [l, l.toUpperCase()]), S.level, v => { S.level = v; store.set("level", v); });
+chipGroup("g-level", Object.keys(LEVEL_SETS).map(l => [l, l.toUpperCase()]), S.level, v => { S.level = v; store.set("level", v); renderHome(); });
+chipGroup("g-focus", [["due", "Due & hard"], ["all", "Everything"]], S.focus, v => { S.focus = v; store.set("focus", v); renderHome(); });
 chipGroup("g-mode", [["families", "Families"], ["cousins", "Cousins (harder)"]].concat(HAS_SOUND ? [["sounds", "Sounds (readings)"]] : [], [["build", "Build (whole kanji)"]]),
   S.mode, v => { S.mode = v; store.set("mode", v); });
 chipGroup("g-mean", [["true", "On"], ["false", "Off"]], S.meanings, v => { S.meanings = v === "true"; store.set("meanings", S.meanings); });

@@ -91,6 +91,9 @@ if os.path.exists(kdb_path):
         data["kanji"][k].append(on(k))
     data["sound"] = sounds
     data["roles"] = roles
+# the quiz's schedule, so the game can aim at what's due: [due date, misses] per kanji in progress
+data["srs"] = {k: [datetime.date.fromordinal(state[k]["due"]).isoformat(), state[k].get("lapses", 0)]
+               for k in pool if k in state and not kanji[k]["known"] and state[k].get("due")}
 used = {c for k in pool for c in kanji[k]["comps"]}
 data["parts"] = {c: (q.short(kanji[c]["text"]) if c in kanji else
                      ("" if cm.get(c, "").startswith("u+") else cm.get(c, "").split(",")[0].strip()))
