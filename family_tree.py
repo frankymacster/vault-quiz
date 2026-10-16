@@ -127,7 +127,8 @@ if os.path.exists(kdb_path):
             if c in kanji and c not in kun:
                 kun[c] = word_align.readings_of(kdb.get(c, {}))[1][:6]
     data["words"], data["kun"] = words, kun
-    data["romaji"], data["stop"] = q._ROMAJI, sorted(q.STOPWORDS)
+    data["stop"] = sorted(q.STOPWORDS)
+    data["anchor"] = {k: kanji[k]["anchor"] for k in pool if kanji[k].get("anchor") in words}
     data["vsrs"] = {w: [datetime.date.fromordinal(c["due"]).isoformat(), c.get("lapses", 0), c.get("reps", 0)]
                     for w, c in vstate.items() if w in words and not words[w][4] and c.get("due")}
     vprog = collections.defaultdict(lambda: [0, 0, 0, 0, 0])

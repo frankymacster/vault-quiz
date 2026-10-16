@@ -16,7 +16,7 @@ to the vault's .quiz_state.json with the quiz's own rules:
 
 Words mode answers go to the vocabulary schedule (.vocab_state.json, the
 quiz's --vocab mode): a word is right when both its reading and its meaning
-are. A new word is studied in the game before it's tested, so its first test
+are (in Build, a kanji's anchor word is asked for its reading only). A new word is studied in the game before it's tested, so its first test
 starts it, as in the quiz; after that the same rules as kanji apply.
 
 Each event is applied once: imported counts per session document are kept
