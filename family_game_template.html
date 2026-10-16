@@ -42,9 +42,6 @@ button { font: inherit; color: inherit; }
 h1 { font-family: var(--glyph); font-weight: 800; font-size: 1.9rem; margin: 0; letter-spacing: .01em; text-wrap: balance; }
 h1 .jp { color: var(--indigo); margin-right: .3em; }
 .lede { margin: 6px 0 0; color: var(--muted); max-width: 52ch; }
-.stats { display: flex; flex-wrap: wrap; gap: 10px 26px; font-variant-numeric: tabular-nums; }
-.stats div { display: grid; }
-.stats b { font-family: var(--mono); font-weight: 500; font-size: 1.3rem; }
 .prog { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: .85rem; width: 100%; max-width: 520px; }
 .prog th { font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; text-align: right; padding: 0 0 4px 10px; }
 .prog td { font-family: var(--mono); text-align: right; padding: 3px 0 3px 10px; border-top: 1px solid var(--line); }
@@ -75,21 +72,20 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .prog .delta { font-size: .72rem; color: var(--good); margin-left: 3px; }
 .prog .delta.down { color: var(--muted); }
 .prog-wrap { overflow-x: auto; }
-.stats span { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .setting { display: grid; gap: 8px; }
 .setting > span { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { font-size: .85rem; border: 1px solid var(--line); background: var(--sheet); color: var(--muted); padding: 6px 12px; border-radius: 7px; cursor: pointer; }
 .chip[aria-pressed=true] { background: var(--indigo); border-color: var(--indigo); color: var(--sheet); }
+.choose { display: grid; gap: 12px; }
+.choose > summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+.choose[open] { gap: 14px; }
+.check .why { display: block; font-weight: 400; font-size: .9rem; color: var(--muted); margin-top: 4px; }
 .plan-box { display: grid; gap: 6px; padding: 14px 16px; border: 1.5px solid var(--indigo); border-radius: 14px; background: var(--sheet); }
 .start.alt { background: none; color: var(--indigo); border: 1.5px solid var(--indigo); }
 .planstrip { font-size: .85rem; color: var(--muted); margin: 0; }
 .planstrip b { color: var(--ink); font-weight: 600; }
 .start { justify-self: start; font-weight: 600; font-size: 1.05rem; background: var(--indigo); color: var(--sheet); border: 0; border-radius: 10px; padding: 12px 26px; cursor: pointer; }
-.map { display: grid; gap: 8px; }
-.map .dots { display: flex; flex-wrap: wrap; gap: 3px; }
-.map .dots i { width: 9px; height: 9px; border-radius: 2px; background: var(--line); }
-.map .dots i.built { background: var(--good); }
 .note { font-size: .8rem; color: var(--muted); margin: 0; max-width: 60ch; }
 .saved.on::before, .saved.off::before { content: "●"; margin-right: 6px; }
 .saved.on::before { color: var(--good); } .saved.off::before { color: var(--line); }
@@ -194,25 +190,22 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
   <section class="home" id="home">
     <div>
       <h1><span class="jp">家系</span>Kanji Family Builder</h1>
-      <p class="lede">Put each kanji back into its family by finding the part it's built on, then say what it means. In Sounds mode, find the part that gives its reading, then pick the reading. Build mode takes one kanji apart completely: all its parts, which one gives the sound, its meaning and its reading. Words mode teaches readings inside real words, showing which reading each kanji takes. One question at a time.</p>
+      <p class="lede">One kanji at a time: take it apart, tell it from its look-alikes, read it in a word.</p>
     </div>
-    <div class="stats">
-      <div><b id="s-built">0</b><span>families rebuilt</span></div>
-      <div id="s-snd-box"><b id="s-snd">0</b><span>sound families rebuilt</span></div>
-      <div><b id="s-kanji">0</b><span>kanji fully built</span></div>
-      <div><b id="s-best">0</b><span>best streak</span></div>
-    </div>
-    <div class="prog-wrap"><table class="prog" id="prog"></table><table class="prog" id="vprog"></table><p class="note" id="prog-note"></p></div>
-    <div class="setting"><span>levels</span><div class="chips" id="g-level"></div></div>
-    <div class="setting"><span>focus</span><div class="chips" id="g-focus"></div><span class="note" id="due-note"></span></div>
     <div class="plan-box">
       <button class="start" id="plan-start" type="button">Start today's plan</button>
       <p class="note" id="plan-note"></p>
     </div>
-    <div class="setting"><span>kanji</span><div class="chips" id="g-mode"></div></div>
-    <div class="setting"><span>words</span><div class="chips" id="g-words"></div></div>
-    <div class="setting"><span>more</span><div class="chips" id="g-more"></div></div>
-    <div class="setting"><span>meanings</span><div class="chips" id="g-mean"></div></div>
+    <div class="prog-wrap"><table class="prog" id="prog"></table><table class="prog" id="vprog"></table><p class="note" id="prog-note"></p></div>
+    <details class="choose" id="choose">
+      <summary>Choose an exercise yourself</summary>
+      <div class="setting"><span>levels</span><div class="chips" id="g-level"></div></div>
+      <div class="setting"><span>kanji</span><div class="chips" id="g-mode"></div></div>
+      <div class="setting"><span>words</span><div class="chips" id="g-words"></div></div>
+      <div class="setting"><span>review</span><div class="chips" id="g-focus"></div></div>
+      <p class="note" id="due-note"></p>
+      <button class="start alt" id="start" type="button">Start</button>
+    </details>
     <details class="guide" id="guide">
       <summary>How to spot the part that gives the sound</summary>
       <ol>
@@ -223,14 +216,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
       </ol>
       <div class="rads" id="rads"></div>
     </details>
-    <button class="start alt" id="start" type="button">Start this mode</button>
-    <div class="map" aria-label="Your tree">
-      <div class="setting"><span>your tree</span></div>
-      <div class="dots" id="dots"></div>
-      <p class="note" id="map-note"></p>
-    </div>
     <p class="note saved off" id="saved">Scores are saved in this browser only.</p>
-    <p class="note" id="foot"></p>
   </section>
 
   <section id="play" hidden>
@@ -248,8 +234,6 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
 <script>
 const D = JSON.parse(document.getElementById("data").textContent);
 const F = D.families, K = D.kanji, LV = D.levels;
-const parentOf = {};
-for (const [f, v] of Object.entries(F)) for (const c of v.c) parentOf[c] = f;
 const $ = id => document.getElementById(id);
 
 const store = {
@@ -259,10 +243,7 @@ const store = {
 const LEVEL_SETS = { "n5–n4": ["n5", "n4"], "n3": ["n3"], "n2": ["n2"], "n1": ["n1"], "all": LV };
 const S = {
   level: store.get("level", "n5–n4"),
-  mode: store.get("mode", "families"),
-  meanings: store.get("meanings", true),
-  built: new Set(store.get("built", [])),
-  builtSound: new Set(store.get("builtSound", [])),
+  mode: store.get("mode", "build"),
   builtKanji: new Set(store.get("builtKanji", [])),
   learnedSound: new Set(store.get("learnedSound", [])),
   focus: store.get("focus", "due"),
@@ -287,7 +268,7 @@ if (!LEVEL_SETS[S.level]) S.level = "n5–n4";
 const SND = D.sound || {};
 const HAS_SOUND = Object.keys(SND).length > 0;
 if (S.mode === "new") S.mode = "knew";
-if (!["knew", "build", "lookalikes", "wnew", "words", "families", "cousins", "sounds"].includes(S.mode) || (S.mode === "sounds" && !HAS_SOUND)) S.mode = "families";
+if (!["knew", "build", "lookalikes", "wnew", "words"].includes(S.mode)) S.mode = "build";
 // ---- the schedule: your quiz's cards as of the last sync, plus what you've answered here since,
 // applied with the same rules game_sync.py uses, so progress shows before it reaches the vault
 const SRS = D.srs || {}, VS = D.vsrs || {};
@@ -353,13 +334,8 @@ function focusKanji() {
   return [...new Set(Object.keys(SRS).concat(Object.keys(S.ov)))].filter(k => inLevel(k) && (isDue(k) || isHard(k)))
     .sort((a, b) => isHard(b) - isHard(a) || kCard(a).due.localeCompare(kCard(b).due));
 }
-const focusing = () => S.focus === "due" && focusKanji().length > 0;
 const famOf = {};
 for (const [f, v] of Object.entries(F)) for (const k of v.k) famOf[k] = f;
-const isSound = () => S.mode === "sounds";
-const famMembers = f => isSound() ? SND[f].k : F[f].k;
-const famLabel = f => isSound() ? SND[f].r : (F[f].m || "");
-const reading = (k, f) => SND[f].a[k];
 const unvoice = s => s.replace(/[がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ]/g,
   c => "かきくけこさしすせそたちつてとはひふへほはひふへほ"["がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ".indexOf(c)]);
 
@@ -379,12 +355,10 @@ const dbReady = (window.claude && window.claude.use ? window.claude.use("db") : 
     db.doc("progress/state").get().then(snap => {
       if (!snap.exists) return;
       const p = snap.data();
-      (p.built || []).forEach(f => S.built.add(f));
-      (p.builtSound || []).forEach(f => S.builtSound.add(f));
       (p.builtKanji || []).forEach(k => S.builtKanji.add(k));
       (p.learnedSound || []).forEach(f => S.learnedSound.add(f));
       if ((p.best || 0) > S.best) S.best = p.best;
-      store.set("built", [...S.built]); store.set("best", S.best);
+      store.set("best", S.best);
       renderHome();
     }).catch(() => {});
   });
@@ -403,7 +377,7 @@ function flushResults() {
   const db = results.db;
   if (!db) return;
   const body = { started: results.started, updated: new Date().toISOString(), events: results.events.slice() };
-  const progress = { built: [...S.built], builtSound: [...S.builtSound], builtKanji: [...S.builtKanji], learnedSound: [...S.learnedSound], best: S.best, updated: body.updated };
+  const progress = { builtKanji: [...S.builtKanji], learnedSound: [...S.learnedSound], best: S.best, updated: body.updated };
   const docId = results.id + (results.part ? "-" + results.part : "");
   // a very long visit moves on to a fresh document once this one is saved (documents cap at 256 KiB)
   if (results.events.length > 1500) { results.part++; results.events = []; }
@@ -418,86 +392,6 @@ function flushResults() {
 
 const rnd = n => Math.floor(Math.random() * n);
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = rnd(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
-
-// ---- choosing a round
-function tilesOf(f) {
-  const lv = curLevels();
-  const ks = famMembers(f).filter(k => k !== f && K[k] && lv.includes(K[k][1]));
-  if (!focusing()) return ks;
-  const fk = new Set(focusKanji());
-  return ks.filter(k => fk.has(k)).concat(ks.filter(k => !fk.has(k)));
-}
-// families (shape or sound) holding the most focus kanji, greedily, no kanji shared between them
-function focusFamilies(keys, membersOf) {
-  const fk = focusKanji(), fset = new Set(fk);
-  const out = [], seen = new Set();
-  const score = f => membersOf(f).filter(k => fset.has(k) && !seen.has(k)).length;
-  for (let n = 0; n < 4; n++) {
-    const best = keys.filter(f => !out.includes(f) && tilesOf(f).length && !membersOf(f).some(k => seen.has(k)))
-      .sort((a, b) => score(b) - score(a) || Math.random() - .5)[0];
-    if (!best || (score(best) === 0 && out.length >= 2)) break;
-    if (score(best) === 0 && !out.length) return [];
-    out.push(best); membersOf(best).forEach(k => seen.add(k));
-  }
-  return out;
-}
-function familiarity(f) {
-  const ts = F[f].k;
-  return ts.filter(k => kStatus(k) !== "new").length / ts.length;
-}
-// sound families with different sounds, so the reading step never offers two right answers
-function pickSoundFamilies() {
-  if (focusing()) {
-    const fams = focusFamilies(Object.keys(SND), f => SND[f].k);
-    const uniq = [], keys = new Set();
-    for (const f of fams) { const kk = unvoice(SND[f].r); if (!keys.has(kk)) { uniq.push(f); keys.add(kk); } }
-    if (uniq.length >= 2) { S.fellBack = false; return { fams: uniq, parent: null }; }
-  }
-  const ok = shuffle(Object.keys(SND).filter(f => tilesOf(f).length >= 1));
-  const fresh = ok.filter(f => !S.builtSound.has(f));
-  const pool = fresh.length >= 3 ? fresh : ok;
-  const out = [], keys = new Set(), seen = new Set();
-  for (const f of pool) {
-    const key = unvoice(SND[f].r);
-    if (keys.has(key) || SND[f].k.some(k => seen.has(k))) continue;
-    out.push(f); keys.add(key); SND[f].k.forEach(k => seen.add(k));
-    const n = out.reduce((s, g) => s + Math.min(tilesOf(g).length, 5), 0);
-    if (out.length === 4 || (out.length === 3 && n >= 6)) break;
-  }
-  return { fams: out, parent: null };
-}
-
-function pickFamilies() {
-  S.fellBack = S.focus === "due" && S.mode !== "cousins";
-  if (isSound()) return pickSoundFamilies();
-  if (focusing() && S.mode === "families") {
-    const fams = focusFamilies(Object.keys(F), f => F[f].k);
-    if (fams.length >= 2) { S.fellBack = false; return { fams, parent: null }; }
-  }
-  const ok = Object.keys(F).filter(f => tilesOf(f).length >= 1);
-  const fresh = ok.filter(f => !S.built.has(f));
-  const pool = fresh.length >= 3 ? fresh : ok;
-  if (S.mode === "cousins") {
-    const parents = shuffle(Object.keys(F).filter(p => F[p].c.filter(c => tilesOf(c).length).length >= 3));
-    for (const p of parents) {
-      const kids = shuffle(F[p].c.filter(c => tilesOf(c).length));
-      const unbuilt = kids.filter(c => !S.built.has(c));
-      const pick = (unbuilt.length >= 3 ? unbuilt : kids).slice(0, 3);
-      if (pick.length === 3) return { fams: pick, parent: p };
-    }
-  }
-  // weight toward families you partly know, so a round is winnable but still teaches
-  const weighted = shuffle(pool.slice()).sort((a, b) => familiarity(b) - familiarity(a) + (Math.random() - .5) * .6);
-  const out = [];
-  const tileCount = () => out.reduce((n, g) => n + Math.min(tilesOf(g).length, 5), 0);
-  for (const f of weighted) {
-    if (out.some(g => F[g].k.includes(f) || F[f].k.includes(g))) continue;
-    out.push(f);
-    // most families are small, so a fourth family keeps a round from being over in three taps
-    if (out.length === 4 || (out.length === 3 && tileCount() >= 6)) break;
-  }
-  return { fams: out, parent: null };
-}
 
 const words = s => new Set(s.toLowerCase().match(/[a-z']{3,}/g) || []);
 const overlaps = (a, b) => { const A = words(a); return [...words(b)].some(w => A.has(w)); };
@@ -546,89 +440,44 @@ function startRound() {
   if (S.mode === "build") return startBuild();
   if (S.mode === "wnew") return startWords(newWordsToLearn().slice(0, 4), "No new words to learn at this level: words come from kanji you know or are learning.");
   if (S.mode === "words") return startWords(dueWords().slice(0, 6), "No words due at this level. Learn some under Words → New.");
-  if (S.mode === "lookalikes") return startLookalikes();
-  const { fams, parent } = pickFamilies();
-  show("play");
-  if (fams.length < 2) {
-    S.phase = null;
-    card(`<p class="verdict">Nothing to sort at this level.</p><button class="next" type="button" id="home-btn" data-focus>Back</button>`);
-    $("home-btn").addEventListener("click", goHome);
-    return;
-  }
-  const tiles = shuffle(fams.flatMap(f => tilesOf(f).slice(0, 5).map(k => ({ k, f }))));
-  S.round = { fams, parent, tiles, i: 0, results: [], missedFams: new Set(),
-              notice: S.fellBack ? "nothing due here: everything" : "" };
-  isSound() ? teachThen(fams, null, familyStep) : familyStep();
-}
-
-// step 1: which family?
-function familyStep() {
-  const R = S.round, { k } = R.tiles[R.i];
-  const [gloss, lv, st] = K[k];
-  S.phase = "family"; S.locked = false;
-  renderBar();
-  const hint = isSound() ? `${gloss} · find the part that gives its sound <span class="radtag">(h: hint)</span>`
-    : st === "new" ? `new to you: ${gloss}`
-    : R.parent ? `cousins under ${R.parent}${F[R.parent].m ? " (" + F[R.parent].m + ")" : ""}: find the part that differs`
-    : lv.toUpperCase();
-  card(`
-    <p class="q">${isSound() ? "which part gives its sound?" : "which family is it built on?"}</p>
-    <div class="glyph">${k}</div>
-    <p class="hint">${hint}</p>
-    <div class="choices fam" role="group" aria-label="Families">
-      ${R.fams.map((f, i) => `<button class="choice" type="button" data-f="${f}"><span class="key">${i + 1}</span><span class="seal">${f}</span><span class="m">${famLabel(f)}</span></button>`).join("")}
-    </div>
-    <p class="check" id="check"></p>`);
-  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerFamily(b.dataset.f)));
-}
-
-function answerFamily(f) {
-  const R = S.round;
-  if (S.phase !== "family" || S.locked) return;
-  S.locked = true;
-  const { k, f: right } = R.tiles[R.i];
-  const ok = f === right;
-  R.results.push({ fam: ok, mean: null });
-  record({ step: isSound() ? "sound_family" : "family", k, status: K[k][2], right, picked: f, ok, hinted: !!R.hinted });
-  R.hinted = false;
-  const ask = isSound() || (S.meanings && kStatus(k) !== "new");
-  const second = isSound() ? readingStep : meaningStep;
-  if (ok) {
-    S.streak++; bumpBest();
-    document.querySelector(`.choice[data-f="${f}"]`).classList.add("right");
-    $("check").textContent = "✓";
-    setTimeout(() => (ask ? second() : nextTile()), 450);
-  } else {
-    S.streak = 0; R.missedFams.add(right); R.tiles[R.i].missed = true;
-    // feedback screen: the meaning is withheld when it's about to be asked
-    S.phase = "review";
-    card(isSound() ? `
-      <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> gets its sound from <span class="g">${right}</span> (${SND[right].r}), not <span class="g">${f}</span> (${SND[f].r})</p>
-      ${partsRow(k, "right", "its parts")}
-      <div class="compare">
-        <div class="crow right"><span class="cg">${right}</span><span class="cm"><b>sounds ${SND[right].r}</b><span class="members">${membersHTML(right)}</span></span></div>
-        <div class="crow picked"><span class="cg">${f}</span><span class="cm"><b>sounds ${SND[f].r}</b><span class="members">${membersHTML(f)}</span></span></div>
-      </div>
-      <button class="next" type="button" id="cont" data-focus>Continue to the reading</button>
-      <p class="sub">or press Enter</p>` : `
-      <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> is built on <span class="g">${right}</span>${F[right].m ? " " + F[right].m : ""}, not <span class="g">${f}</span>${F[f].m ? " " + F[f].m : ""}</p>
-      <div class="compare">
-        <div class="crow right"><span class="cg">${right}</span><span class="cm"><b>its family</b>${F[right].k.join(" ")}</span></div>
-        <div class="crow picked"><span class="cg">${f}</span><span class="cm"><b>you picked</b>${F[f].k.join(" ")}</span></div>
-      </div>
-      <button class="next" type="button" id="cont" data-focus>${ask ? "Continue to the meaning" : "Continue"}</button>
-      <p class="sub">or press Enter</p>`);
-    S.afterReview = ask ? second : nextTile;
-    $("cont").addEventListener("click", continueReview);
-  }
+  return startLookalikes();
 }
 
 // step 2: what does it mean?
+// what each part brings: 清 = 氵 water + 青 (sound せい)
+function whyHTML(k) {
+  const roles = (D.roles && D.roles[k]) || {}, parts = ownParts(k);
+  if (parts.length < 2) return "";
+  return `<span class="why">${k} = ${parts.map(c => `${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}` +
+    (roles[c] === "s" ? ` (sound ${(SND[c] && SND[c].a[k]) || (D.partOn && D.partOn[c]) || ""})` : "")).join(" + ")}</span>`;
+}
+// kanji it could be mistaken for: your lookalikes first, then started kanji sharing a part with it
+function rivals(k) {
+  const mine = new Set(ownParts(k));
+  const kin = (famOf[k] ? F[famOf[k]].k : []).concat(...ownParts(k).map(c => partUsers[c] || []));
+  return [...new Set(lookLinks(k).concat(shuffle(kin.filter(x => kStatus(x) !== "new"))))]
+    .filter(x => x !== k && K[x] && !overlaps(K[x][0], K[k][0]) && (lookLinks(k).includes(x) || ownParts(x).some(c => mine.has(c))));
+}
 function meaningStep() {
-  const R = S.round, { k } = R.tiles[R.i];
-  R.opts = meaningOptions(k);
+  const R = S.round, t = R.tiles[R.i], { k } = t;
+  const rv = t.fresh ? [] : rivals(k).slice(0, 3);
+  // half the time in review: the meaning, and which of its look-alikes it is
+  R.rev = rv.length >= 2 && Math.random() < .5;
+  R.opts = R.rev ? shuffle([k, ...rv].map(x => ({ k: x, g: K[x][0] }))) : meaningOptions(k);
   S.phase = "meaning"; S.locked = false;
   renderBar();
+  if (R.rev) {
+    card(`
+    <p class="q">which one means…</p>
+    <p class="verdict"><b>${K[k][0]}</b></p>
+    <div class="choices fam" role="group" aria-label="Kanji">
+      ${R.opts.map((o, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${o.k}</span></button>`).join("")}
+    </div>
+    <p class="hint">they share a part: find the one that differs</p>
+    <p class="check" id="check"></p>`);
+    document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerMeaning(+b.dataset.i)));
+    return;
+  }
   card(`
     <p class="q">what does it mean?</p>
     <div class="glyph">${k}</div>
@@ -655,78 +504,22 @@ function answerMeaning(i) {
   if (ok) {
     S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
-    $("check").textContent = `✓ ${right}`;
-    setTimeout(nextTile, 650);
+    $("check").innerHTML = `✓ ${R.rev ? k + " " : ""}${right}${whyHTML(k)}`;
+    setTimeout(buildAdvance, 1500);
   } else {
-    S.streak = 0; R.missedFams.add(f); R.tiles[R.i].missed = true;
+    S.streak = 0; R.tiles[R.i].missed = true;
     S.phase = "review";
     card(`
-      <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> means <b>${right}</b>. You picked the meaning of <span class="g">${other}</span></p>
+      <p class="verdict"><span class="no">✗</span> ${R.rev
+        ? `<b>${right}</b> is <span class="g">${k}</span>; <span class="g">${other}</span> means ${K[other][0]}.`
+        : `<span class="g">${k}</span> means <b>${right}</b>. You picked the meaning of <span class="g">${other}</span>.`}</p>
       ${compareHTML(k, other)}
       <button class="next" type="button" id="cont" data-focus>Continue</button>
       <p class="sub">or press Enter</p>`);
-    S.afterReview = nextTile;
+    S.afterReview = buildAdvance;
     $("cont").addEventListener("click", continueReview);
   }
 }
-
-// step 2 in Sounds mode: how is it read? (its on'yomi, from the sound part)
-function readingOptions(k) {
-  const R = S.round, f = R.tiles[R.i].f, right = reading(k, f);
-  const own = new Set(K[k][4] || []);
-  const bad = r => own.has(r) || unvoice(r) === unvoice(right);
-  const picked = [];
-  const add = (r, src) => { if (picked.length < 3 && r && !bad(r) && !picked.some(o => unvoice(o.r) === unvoice(r))) picked.push({ r, f: src }); };
-  for (const g of R.fams) if (g !== f) add(SND[g].r, g);
-  for (const g of shuffle(Object.keys(SND))) add(SND[g].r, g);
-  return shuffle([{ r: right, f }, ...picked]);
-}
-
-function readingStep() {
-  const R = S.round, { k } = R.tiles[R.i];
-  R.opts = readingOptions(k);
-  S.phase = "reading"; S.locked = false;
-  renderBar();
-  card(`
-    <p class="q">how is it read?</p>
-    <div class="glyph">${k}</div>
-    <p class="hint">${K[k][0]} · its on'yomi</p>
-    <div class="choices" role="group" aria-label="Readings">
-      ${R.opts.map((o, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="txt">${o.r}</span></button>`).join("")}
-    </div>
-    <p class="check" id="check"></p>`);
-  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerReading(+b.dataset.i)));
-}
-
-function answerReading(i) {
-  const R = S.round;
-  if (S.phase !== "reading" || S.locked) return;
-  S.locked = true;
-  const { k, f } = R.tiles[R.i];
-  const right = reading(k, f), pick = R.opts[i], ok = pick.r === right;
-  R.results[R.results.length - 1].mean = ok;
-  record({ step: "reading", k, status: K[k][2], family: f, right, picked: pick.r, ok });
-  if (ok && isSound() && (isDue(k) || isHard(k))) { S.reviewed[k] = todayISO(); store.set("reviewed", S.reviewed); }
-  if (ok) {
-    S.streak++; bumpBest();
-    document.querySelectorAll(".choice")[i].classList.add("right");
-    $("check").textContent = `✓ ${right}, from ${f}`;
-    setTimeout(nextTile, 700);
-  } else {
-    S.streak = 0; R.missedFams.add(f); R.tiles[R.i].missed = true;
-    S.phase = "review";
-    card(`
-      <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> reads <b>${right}</b>, from its sound part <span class="g">${f}</span>. You picked ${pick.r}${pick.f && pick.f !== f ? `, the sound of <span class="g">${pick.f}</span>` : ""}</p>
-      ${partsRow(k, "right", "its parts")}
-      <div class="compare"><div class="crow right"><span class="cg">${f}</span><span class="cm"><b>sounds ${SND[f].r}</b><span class="members">${membersHTML(f)}</span></span></div></div>
-      <button class="next" type="button" id="cont" data-focus>Continue</button>
-      <p class="sub">or press Enter</p>`);
-    S.afterReview = nextTile;
-    $("cont").addEventListener("click", continueReview);
-  }
-}
-
-const membersHTML = f => SND[f].k.map(k => `${k}<small>${SND[f].a[k]}</small>`).join("");
 
 // one part chip, tagged with what that part does in this kanji: carries the meaning, or gives the
 // sound (with the part's own reading). Untagged when neither could be worked out.
@@ -856,7 +649,7 @@ function startBuild(pick) {
     tiles.splice(Math.min(tiles.length, at + 3), 0, { k, f: famOf[k], fresh: true });
   });
   S.round = { build: true, isNew: fresh.length > 0, fams: [], parent: null, tiles, i: 0, si: 0,
-              results: [], missedFams: new Set(), notice: S.fellBack ? "nothing due here: practice" : "" };
+              results: [], notice: S.fellBack ? "nothing due here: practice" : "" };
   buildTileStart();
 }
 function buildTileStart() {
@@ -1187,7 +980,7 @@ function startWords(ws, empty) {
   // a new word is studied first and tested three words later, as in the quiz
   const tiles = ws.map(w => ({ k: w, study: !wStarted(w) }));
   for (let j = tiles.length - 1; j >= 0; j--) if (tiles[j].study) tiles.splice(Math.min(tiles.length, j + 4), 0, { k: tiles[j].k, fresh: true });
-  S.round = { words: true, fams: [], tiles, i: 0, results: [], missedFams: new Set(),
+  S.round = { words: true, fams: [], tiles, i: 0, results: [],
               notice: S.fellBack ? "no words due: new words" : "" };
   wordTile();
 }
@@ -1510,7 +1303,7 @@ function startLookalikes(given) {
     shuffle(g.slice()).forEach(k => tiles.push({ kind: "type", k, g, gi }));
     shuffle(g.slice()).forEach(k => tiles.push({ kind: "rev", k, g, gi }));
   });
-  S.round = { looks: true, groups, fams: [], tiles, i: 0, results: [], missedFams: new Set(),
+  S.round = { looks: true, groups, fams: [], tiles, i: 0, results: [],
               notice: S.fellBack ? "nothing due here: other lookalikes" : "" };
   lookTile();
 }
@@ -1848,48 +1641,9 @@ function requeueIfMissed(R) {
   const t = R.tiles[R.i];
   if (t.missed && !t.retry) R.tiles.splice(Math.min(R.tiles.length, R.i + 4), 0, { k: t.k, f: t.f, retry: true });
 }
-function nextTile() {
-  const R = S.round;
-  if (R.build) return buildAdvance();
-  if (R.words) return wordAdvance();
-  if (R.looks) return lookAdvance();
-  requeueIfMissed(R);
-  R.i++;
-  R.i < R.tiles.length ? familyStep() : endRound();
-}
 
 function bumpBest() {
   if (S.streak > S.best) { S.best = S.streak; store.set("best", S.best); }
-}
-
-// end of round
-function endRound() {
-  const R = S.round;
-  const builtNow = R.fams.filter(f => !R.missedFams.has(f));
-  const into = isSound() ? S.builtSound : S.built;
-  builtNow.forEach(f => into.add(f));
-  store.set("built", [...S.built]); store.set("builtSound", [...S.builtSound]);
-  record({ step: "round", families: R.fams, rebuilt: builtNow, parent: R.parent || null });
-  flushResults();
-  const sorted = R.results.filter(r => r.fam).length;
-  const asked = R.results.filter(r => r.mean !== null), meant = asked.filter(r => r.mean).length;
-  S.phase = "summary";
-  S.summaryAt = Date.now();
-  renderBar();
-  $("b-track").style.width = "100%";
-  card(`
-    <p class="q">round done</p>
-    <p class="verdict">${sorted} of ${R.results.length} sorted${asked.length ? ` · ${meant} of ${asked.length} ${isSound() ? "readings" : "meanings"}` : ""}</p>
-    <div class="fams">${R.fams.map(f => `<div class="fam ${builtNow.includes(f) ? "built" : ""}">
-      <b>${f}</b><span>${isSound() ? SND[f].r + " · " : ""}${builtNow.includes(f) ? "rebuilt" : "try again later"}</span><small>${famMembers(f).join("")}</small></div>`).join("")}</div>
-    <div class="row">
-      <button class="next" type="button" id="again" data-focus>Next round</button>
-      <button class="ghost" type="button" id="home-btn">Back to start</button>
-    </div>
-    <p class="sub">Enter for the next round</p>`);
-  planButton();
-  $("again").addEventListener("click", startRound);
-  $("home-btn").addEventListener("click", goHome);
 }
 
 // ======================= today's plan: reviews on time, contrast right after a mix-up, anchor words, then new kanji
@@ -2011,14 +1765,9 @@ function renderProgress() {
     (pending ? `The +/− are your game answers since ${D.generated}; they reach your vault when Claude syncs.` : `As of ${D.generated}.`);
 }
 function renderHome() {
-  $("s-built").textContent = `${S.built.size} / ${Object.keys(F).length}`;
-  $("s-best").textContent = S.best;
-  $("s-snd").textContent = `${S.builtSound.size} / ${Object.keys(SND).length}`;
-  $("s-snd-box").hidden = !HAS_SOUND;
-  $("s-kanji").textContent = S.builtKanji.size;
   renderProgress();
   const next = planDecide(); S.planLevels = null;
-  $("plan-note").textContent = `Chooses the next exercise for you: due reviews first, lookalikes right after a mix-up, your anchor words, then new kanji (${newLeft()} left today at ${targetLevel().toUpperCase()}). Next: ${next.label}.`;
+  $("plan-note").textContent = `Next: ${next.label}. Due reviews come first, look-alikes right after a mix-up, then your anchor words and new kanji (${newLeft()} left today at ${targetLevel().toUpperCase()}).`;
   const fk = focusKanji();
   if (S.mode === "knew") {
     $("due-note").textContent = `${newCandidates().length} kanji not started at ${S.level.toUpperCase()}; ${newLeft()} more today keeps your reviews manageable. ` +
@@ -2035,13 +1784,7 @@ function renderHome() {
     const dw = dueWords(), started = Object.keys(S.wov).length;
     $("due-note").textContent = `${dw.length} words due at ${S.level.toUpperCase()}` +
       (started ? `; ${started} answered here since the last sync` : "") + `. New words come from kanji you know or are learning.`;
-  } else
-  $("due-note").textContent = Object.keys(SRS).length
-    ? `${fk.length} due or hard at ${S.level.toUpperCase()} (${fk.filter(isHard).length} hard), from your quiz schedule as of ${D.generated}`
-    : "";
-  const order = Object.keys(F).sort((a, b) => F[b].k.length - F[a].k.length || a.localeCompare(b));
-  $("dots").innerHTML = order.map(f => `<i class="${S.built.has(f) ? "built" : ""}" title="${f} ${F[f].m || ""}: ${F[f].k.join("")}"></i>`).join("");
-  $("map-note").textContent = `${S.built.size} of ${order.length} families rebuilt: every kanji in it sorted, and its meaning given where asked, in one round. Each square is a family, largest first.`;
+  }
 }
 
 function chipGroup(id, options, current, onPick) {
@@ -2055,17 +1798,17 @@ function chipGroup(id, options, current, onPick) {
 }
 
 chipGroup("g-level", Object.keys(LEVEL_SETS).map(l => [l, l.toUpperCase()]), S.level, v => { S.level = v; store.set("level", v); renderHome(); });
-chipGroup("g-focus", [["due", "Due & hard"], ["all", "Everything"]], S.focus, v => { S.focus = v; store.set("focus", v); renderHome(); });
+chipGroup("g-focus", [["due", "Due & hard"], ["all", "Practice anything"]], S.focus, v => { S.focus = v; store.set("focus", v); renderHome(); });
 const pickMode = v => {
   S.mode = v; store.set("mode", v);
-  document.querySelectorAll("#g-mode .chip, #g-words .chip, #g-more .chip").forEach(c => c.setAttribute("aria-pressed", c.dataset.v === v));
+  document.querySelectorAll("#g-mode .chip, #g-words .chip").forEach(c => c.setAttribute("aria-pressed", c.dataset.v === v));
   renderHome();
 };
 chipGroup("g-mode", [["knew", "New"], ["build", "Review"], ["lookalikes", "Lookalikes"]], S.mode, pickMode);
 if (HAS_WORDS) chipGroup("g-words", [["wnew", "New"], ["words", "Review"]], S.mode, pickMode);
-chipGroup("g-more", [["families", "Families"], ["cousins", "Cousins"]].concat(HAS_SOUND ? [["sounds", "Sounds"]] : []), S.mode, pickMode);
-chipGroup("g-mean", [["true", "On"], ["false", "Off"]], S.meanings, v => { S.meanings = v === "true"; store.set("meanings", S.meanings); });
 $("start").addEventListener("click", startRound);
+$("choose").open = store.get("chooseOpen", false);
+$("choose").addEventListener("toggle", () => store.set("chooseOpen", $("choose").open));
 $("plan-start").addEventListener("click", () => { S.inPlan = true; planNext(); });
 $("quit").addEventListener("click", goHome);
 
@@ -2087,7 +1830,7 @@ document.addEventListener("keydown", e => {
   if (S.phase === "wstudy" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); wordAdvance(); return; }
   if (S.phase === "wreading" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerWordReading(+e.key - 1); return; }
   if (S.phase === "wmeaning" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerWordMeaning(+e.key - 1); return; }
-  if ((S.phase === "soundpart" || (S.phase === "family" && isSound())) && e.key === "h") {
+  if (S.phase === "soundpart" && e.key === "h") {
     e.preventDefault(); radicalHint(S.round.tiles[S.round.i].k); return;
   }
   if (S.phase === "parts" && /^[1-9]$/.test(e.key)) { e.preventDefault(); togglePart(+e.key - 1); return; }
@@ -2096,21 +1839,13 @@ document.addEventListener("keydown", e => {
   if (S.phase === "banchor" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerAnchor(+e.key - 1); return; }
   if (S.phase === "bteach" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueAnchor(); return; }
   if (S.phase === "breading" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerBuildReading(+e.key - 1); return; }
-  if (S.phase === "family" && /^[1-4]$/.test(e.key)) {
-    const f = S.round.fams[+e.key - 1];
-    if (f) { e.preventDefault(); answerFamily(f); }
-  } else if (S.phase === "reading" && /^[1-4]$/.test(e.key)) {
-    if (+e.key <= S.round.opts.length) { e.preventDefault(); answerReading(+e.key - 1); }
-  } else if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
+  if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick", "lchoose"].includes(S.phase)) {
+  } else if (["meaning", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick", "lchoose"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });
 
-$("foot").textContent =
-  `Built from your Japanese vault on ${D.generated}: the same families as the Kanji Family Tree and the quiz's --clusters mode. ` +
-  `Kanji you haven't started show their meaning; ones you know or are learning are asked for it after you sort them.`;
 $("rads").innerHTML = (D.meaningRadicals || []).map(([c, m]) => `<span><b>${c}</b>${m}</span>`).join("");
 $("guide").hidden = !(D.meaningRadicals || []).length;
 renderHome();
