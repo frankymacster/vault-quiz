@@ -94,6 +94,21 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .opt.wrong { border-color: var(--bad); background: var(--bad-bg); }
 .opt:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
 @media (max-width: 420px) { .options { grid-template-columns: minmax(0, 1fr); } }
+.compare { display: grid; gap: 8px; width: min(520px, 100%); margin-top: 4px; text-align: left; }
+.crow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 10px; border: 1.5px solid var(--line); }
+.crow.right { border-color: var(--good); background: var(--good-bg); }
+.crow.picked { border-color: var(--bad); background: var(--bad-bg); }
+.crow .cg { font-family: var(--glyph); font-weight: 700; font-size: 2.2rem; line-height: 1; }
+.crow .cm { font-size: .82rem; min-width: 7em; }
+.crow .cm b { display: block; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.parts { display: flex; gap: 5px; flex-wrap: wrap; }
+.part { display: inline-flex; align-items: baseline; gap: 4px; padding: 2px 7px; border-radius: 6px; border: 1.5px solid var(--line); background: var(--sheet); font-size: .78rem; color: var(--muted); }
+.part .pg { font-family: var(--glyph); font-size: 1.15rem; color: var(--ink); }
+.part.same { opacity: .55; }
+.crow.right .part.diff { border-color: var(--good); color: var(--good); font-weight: 600; }
+.crow.picked .part.diff { border-color: var(--bad); color: var(--bad); font-weight: 600; }
+.next { font: inherit; font-size: .85rem; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 7px; padding: 6px 12px; cursor: pointer; justify-self: center; }
+.next:hover, .next:focus-visible { border-color: var(--indigo); color: var(--ink); outline: none; }
 .queue { display: flex; gap: 5px; justify-content: center; flex-wrap: wrap; }
 .queue i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .queue i.done { background: var(--good); } .queue i.miss { background: var(--bad); } .queue i.now { background: var(--indigo); }
@@ -305,9 +320,9 @@ function meaningOptions(k) {
   const picked = [];
   for (const pool of pools) for (const x of pool) {
     const g = K[x][0];
-    if (picked.length < 3 && g !== right && !picked.includes(g) && !overlaps(g, right)) picked.push(g);
+    if (picked.length < 3 && g !== right && !picked.some(o => o.g === g) && !overlaps(g, right)) picked.push({ g, k: x });
   }
-  return shuffle([right, ...picked]);
+  return shuffle([{ g: right, k }, ...picked]);
 }
 
 function showMeaningStep() {
@@ -318,8 +333,8 @@ function showMeaningStep() {
   document.getElementById("stage").innerHTML = `
     <div class="tile" aria-label="${k}"><span class="g">${k}</span><span class="s">&nbsp;</span></div>
     <p class="prompt">and what does it mean?</p>
-    <div class="options" role="group" aria-label="Meanings">${R.opts.map((g, i) =>
-      `<button class="opt" type="button" data-i="${i}"><span class="key">${i + 1}</span><span>${g}</span></button>`).join("")}</div>
+    <div class="options" role="group" aria-label="Meanings">${R.opts.map((o, i) =>
+      `<button class="opt" type="button" data-i="${i}"><span class="key">${i + 1}</span><span>${o.g}</span></button>`).join("")}</div>
     <div class="feedback" id="fb" aria-live="polite"></div>`;
   document.querySelectorAll(".opt").forEach(b => b.addEventListener("click", () => answerMeaning(+b.dataset.i)));
   R.locked = false;
@@ -330,10 +345,10 @@ function answerMeaning(i) {
   if (!R || R.locked || R.phase !== "meaning") return;
   R.locked = true;
   const { k, f } = R.tiles[R.i];
-  const right = K[k][0], ok = R.opts[i] === right;
+  const right = K[k][0], other = R.opts[i].k, ok = other === k;
   R.results[R.results.length - 1].mean = ok;
   const btns = document.querySelectorAll(".opt");
-  btns[R.opts.indexOf(right)].classList.add("right");
+  btns[R.opts.findIndex(o => o.k === k)].classList.add("right");
   const fb = document.getElementById("fb");
   if (ok) {
     S.streak++; S.score += 10 * Math.min(S.streak, 5);
@@ -341,11 +356,34 @@ function answerMeaning(i) {
   } else {
     btns[i].classList.add("wrong");
     S.streak = 0; R.missedFams.add(f);
-    fb.innerHTML = `<span class="no">✗</span> <span class="g">${k}</span> means ${right}`;
+    fb.innerHTML = `<span class="no">✗</span> <span class="g">${k}</span> means ${right}. You picked the meaning of <span class="g">${other}</span>` +
+      compareHTML(k, other) + `<button class="next" id="next-tile" type="button">continue (Enter)</button>`;
+    R.phase = "review";
+    document.getElementById("next-tile").addEventListener("click", continueTile);
+    document.getElementById("next-tile").focus();
   }
   if (S.streak > S.best) { S.best = S.streak; store.set("best", S.best); }
   renderScore();
-  setTimeout(advance, ok ? 650 : 1600);
+  if (ok) setTimeout(advance, 650);
+}
+
+// one exit from the comparison, whether by click, Enter on the button, or Enter anywhere
+function continueTile() {
+  if (!S.round || S.round.phase !== "review") return;
+  S.round.phase = "done";
+  advance();
+}
+
+// the two kanji side by side, split into parts: what they share is faded, the part that
+// differs is outlined -- green on the right kanji, red on the one whose meaning you picked
+function compareHTML(k, other) {
+  const pa = K[k][3] || [], pb = K[other][3] || [];
+  const row = (x, mine, theirs, cls, label) => `<div class="crow ${cls}">
+    <span class="cg">${x}</span>
+    <span class="cm"><b>${label}</b>${K[x][0]}</span>
+    <span class="parts">${mine.map(c => `<span class="part ${theirs.includes(c) ? "same" : "diff"}"><span class="pg">${c}</span>${D.parts[c] || ""}</span>`).join("")}</span>
+  </div>`;
+  return `<div class="compare">${row(k, pa, pb, "right", "this one")}${row(other, pb, pa, "picked", "you picked")}</div>`;
 }
 
 function endRound() {
@@ -414,7 +452,11 @@ function bindSettings() {
   });
   document.addEventListener("keydown", e => {
     if (e.target.closest("input, select, textarea")) return;
-    if (S.round && S.round.phase === "meaning" && /^[1-4]$/.test(e.key)) {
+    if (S.round && S.round.phase === "review" && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault(); continueTile();
+    } else if (S.round && S.round.phase === "review") {
+      return;
+    } else if (S.round && S.round.phase === "meaning" && /^[1-4]$/.test(e.key)) {
       e.preventDefault(); answerMeaning(+e.key - 1);
     } else if (S.round && /^[1-4]$/.test(e.key)) {
       const f = S.round.fams[+e.key - 1];

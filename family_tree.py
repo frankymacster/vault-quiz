@@ -79,8 +79,13 @@ data = {
                  for c, m in fams.items()},
     "roots": [c for c in fams if parent[c] is None],
     "loners": sorted((k for k, c in home.items() if c is None), key=rank),
-    "kanji": {k: [q.short(kanji[k]["text"]), q.level(kanji[k]["text"]), status(k)] for k in pool},
+    "kanji": {k: [q.short(kanji[k]["text"]), q.level(kanji[k]["text"]), status(k), kanji[k]["comps"]]
+              for k in pool},
 }
+used = {c for k in pool for c in kanji[k]["comps"]}
+data["parts"] = {c: (q.short(kanji[c]["text"]) if c in kanji else
+                     ("" if cm.get(c, "").startswith("u+") else cm.get(c, "").split(",")[0].strip()))
+                 for c in used}
 blob = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 assert "</script" not in blob
 tpl = sys.argv[3] if len(sys.argv) > 3 else "family_tree_template.html"
