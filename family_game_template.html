@@ -101,6 +101,7 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .shake { animation: shake .42s ease-in-out; }
 @keyframes shake { 0%, 100% { transform: none; } 15% { transform: translateX(-9px); } 35% { transform: translateX(8px); } 55% { transform: translateX(-6px); } 75% { transform: translateX(4px); } 90% { transform: translateX(-2px); } }
 .wtype.bad { border-color: var(--bad); background: var(--bad-bg); }
+.cxmiss { display: grid; gap: 12px; justify-items: center; width: 100%; }
 .miss-note { color: var(--bad); font-weight: 600; margin: 0; max-width: 46ch; }
 .choice.wrong { pointer-events: none; opacity: .8; }
 .q { font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0; }
@@ -508,16 +509,10 @@ function answerMeaning(i) {
     setTimeout(buildAdvance, 1500);
   } else {
     S.streak = 0; R.tiles[R.i].missed = true;
-    S.phase = "review";
-    card(`
-      <p class="verdict"><span class="no">✗</span> ${R.rev
-        ? `<b>${right}</b> is <span class="g">${k}</span>; <span class="g">${other}</span> means ${K[other][0]}.`
-        : `<span class="g">${k}</span> means <b>${right}</b>. You picked the meaning of <span class="g">${other}</span>.`}</p>
-      ${compareHTML(k, other)}
-      <button class="next" type="button" id="cont" data-focus>Continue</button>
-      <p class="sub">or press Enter</p>`);
-    S.afterReview = buildAdvance;
-    $("cont").addEventListener("click", continueReview);
+    const btn = document.querySelectorAll(".choice")[i];
+    btn.classList.add("wrong"); shake(btn);
+    const lead = R.rev ? `<b>${right}</b> is ${k}; ${other} means ${K[other][0]}.` : `${k} means <b>${right}</b>; you picked the meaning of ${other}.`;
+    setTimeout(() => startContrast(k, [other, ...rivals(k).filter(x => x !== other).slice(0, 1)], buildAdvance, 0, lead), 700);
   }
 }
 
@@ -1456,14 +1451,17 @@ function checkLook() {
   const R = S.round, t = R.tiles[R.i];
   if (S.phase !== "ltype" || S.locked) return;
   const k = t.k, input = $("ltype"), guess = input.value.trim();
-  if (!guess) { firstTry(t, false, { guess: "" }); t.tries = (t.tries || 0) + 1; return lookChoose(t); }
+  const others = t.g.filter(x => x !== k);
+  if (!guess) { firstTry(t, false, { guess: "" }); return startContrast(k, others, lookAdvance, 0, `${k} means <b>${kAnswer(k)}</b>.`); }
   const ok = isMatch(guess, kAnswer(k));
   const other = !ok ? t.g.find(x => x !== k && isMatch(guess, kAnswer(x))) : null;
   firstTry(t, ok, { guess, picked: other || null });
   if (t.tries) record({ step: "look_again", k, guess, ok, how: "typed" });
-  if (ok) return lookRight(t);
+  // right on the second try counts as one of the two in a row
+  if (ok) return t.tries ? startContrast(k, others, lookAdvance, 1, `✓ ${k} means <b>${kAnswer(k)}</b>.`) : lookRight(t);
   t.tries = (t.tries || 0) + 1;
-  if (t.tries >= 2) return lookChoose(t, `“${guess.replace(/</g, "&lt;")}” isn't it either.`);
+  if (t.tries >= 2) return startContrast(k, other ? [other, ...others.filter(x => x !== other)] : others, lookAdvance, 0,
+    `“${guess.replace(/</g, "&lt;")}” isn't it either: ${k} means <b>${kAnswer(k)}</b>.`);
   input.classList.add("bad"); shake(input.closest(".step")); input.value = ""; input.focus();
   const esc = guess.replace(/</g, "&lt;");
   $("lmiss").innerHTML = `<p class="miss-note">✗ “${esc}” isn't it${other ? `: that's ${other}` : ""}. Try once more.</p>
@@ -1471,37 +1469,6 @@ function checkLook() {
     <button class="ghost" type="button" id="overrule">I was right (r)</button>`;
   S.overrule = () => { S.overrule = null; R.results[R.results.length - 1].ok = true; t.missed = false; lookRight(t); };
   $("overrule").addEventListener("click", () => S.overrule && S.overrule());
-}
-// four meanings: the group's own, plus look-alike fillers; wrong picks shake and stay crossed out
-function lookChoose(t, lead) {
-  const R = S.round, k = t.k;
-  const pool = shuffle(t.g.filter(x => x !== k).concat(shuffle((famOf[k] ? F[famOf[k]].k : []).filter(x => !t.g.includes(x) && K[x]))));
-  const opts = [k];
-  for (const x of pool) if (opts.length < 4 && !opts.some(o => overlaps(K[o][0], K[x][0]))) opts.push(x);
-  for (const x of shuffle(Object.keys(K)).slice(0, 80)) if (opts.length < 4 && !opts.some(o => o === x || overlaps(K[o][0], K[x][0]))) opts.push(x);
-  R.opts = shuffle(opts);
-  S.phase = "lchoose"; S.locked = false; S.overrule = null;
-  card(`
-    <p class="q">what does it mean? <span class="typed-tag">pick it</span></p>
-    <div class="glyph">${k}</div>
-    ${lead ? `<p class="miss-note">✗ ${lead} Pick from these.</p>` : ""}
-    <div class="choices" role="group" aria-label="Meanings">
-      ${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="txt">${K[x][0]}</span></button>`).join("")}
-    </div>
-    <div id="lmiss"></div>
-    <p class="check" id="check"></p>`);
-  if (lead) shake(document.querySelector("#card .step"));
-  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerLookChoose(+b.dataset.i)));
-}
-function answerLookChoose(i) {
-  const R = S.round, t = R.tiles[R.i];
-  if (S.phase !== "lchoose" || S.locked || i >= R.opts.length) return;
-  const x = R.opts[i], ok = x === t.k, btn = document.querySelectorAll(".choice")[i];
-  record({ step: "look_again", k: t.k, picked: x, ok, how: "choice" });
-  if (ok) { btn.classList.add("right"); return lookRight(t); }
-  if (btn.classList.contains("wrong")) return;
-  btn.classList.add("wrong"); shake(btn);
-  $("lmiss").innerHTML = `<p class="miss-note">✗ “${K[x][0]}” is ${x}. Keep going.</p>${t.g.includes(x) ? clueHTML(t.k, x) : ""}`;
 }
 // the other way round: the meaning, and which of the group it is
 function lookRev(t) {
@@ -1521,23 +1488,21 @@ function lookRev(t) {
 function answerLookRev(i) {
   const R = S.round, t = R.tiles[R.i];
   if (S.phase !== "lrev" || S.locked || i >= R.opts.length) return;
+  S.locked = true;
   const picked = R.opts[i], ok = picked === t.k, btn = document.querySelectorAll(".choice")[i];
-  if (btn.classList.contains("wrong")) return;
-  record({ step: "look_reverse", k: t.k, picked, ok, ...(t.tries ? { again: true } : {}) });
-  if (!t.tries) {
-    R.results.push({ k: t.k, rev: true, ok, retry: !!t.retry, gi: t.gi });
-    if (ok) { S.streak++; bumpBest(); } else { S.streak = 0; t.missed = true; }
-  }
+  record({ step: "look_reverse", k: t.k, picked, ok });
+  R.results.push({ k: t.k, rev: true, ok, retry: !!t.retry, gi: t.gi });
   if (ok) {
-    S.locked = true;
+    S.streak++; bumpBest();
     btn.classList.add("right");
     $("check").textContent = `✓ ${t.k}`;
     setTimeout(lookAdvance, 650);
     return;
   }
-  t.tries = (t.tries || 0) + 1;
+  S.streak = 0; t.missed = true;
   btn.classList.add("wrong"); shake(btn);
-  $("lmiss").innerHTML = `<p class="miss-note">✗ <span class="g">${picked}</span> means ${K[picked][0]}. Keep going.</p>${clueHTML(t.k, picked).replace(/<b>this one<\/b>/, "")}`;
+  setTimeout(() => startContrast(t.k, [picked, ...t.g.filter(x => x !== t.k && x !== picked)], lookAdvance, 0,
+    `<b>${K[t.k][0]}</b> is ${t.k}; you picked ${picked}, ${K[picked][0]}.`), 700);
 }
 function lookAdvance() {
   const R = S.round, t = R.tiles[R.i];
@@ -1575,6 +1540,126 @@ function endLookalikes() {
   planButton();
   $("again").addEventListener("click", startRound);
   $("home-btn").addEventListener("click", goHome);
+}
+
+// ======================= look closer: after a mix-up, stay with the pair until you tell them apart twice in a row
+// the questions come from different sides (meaning → kanji, kanji → meaning, the part that differs)
+// so it's the nuance that gets learned, not the position of an answer
+const CX_GOAL = 2, CX_MAX = 10;
+function startContrast(k, others, then, streak, lead) {
+  const set = [k, ...others.filter(x => K[x] && x !== k)].slice(0, 3);
+  if (set.length < 2) return then();
+  S.cx = { k, set, streak: streak || 0, n: 0, then, last: null };
+  record({ step: "contrast_start", k, set });
+  cxIntro(lead);
+}
+// the opening card: what your eyes skipped, put as something to notice rather than a failure
+function cxIntro(lead) {
+  const { k, set } = S.cx, other = set[1];
+  const { shared, diff } = groupParts([k, other]);
+  const notice = diff[k].length && diff[other].length
+    ? `${shared.length ? `Both have ${shared.join(" ")}. ` : ""}<span class="g">${k}</span> has ${diff[k].map(c => `${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}; <span class="g">${other}</span> has ${diff[other].map(c => `${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}.`
+    : diff[k].length || diff[other].length
+      ? (() => { const big = diff[k].length ? k : other, small = big === k ? other : k;
+          return `<span class="g">${big}</span> is <span class="g">${small}</span> plus ${diff[big].map(c => `${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}.`; })()
+      : `Same parts: the difference is in the strokes. Compare their lengths and positions.`;
+  S.phase = "cxfb";
+  card(`
+    <p class="q">look closer</p>
+    ${lead ? `<p class="hint">${lead}</p>` : ""}
+    <p class="verdict">${notice}</p>
+    ${groupHTML(set, k)}
+    <p class="hint">A few quick questions on just these, until you tell them apart twice in a row.</p>
+    <button class="next" type="button" id="cont" data-focus>Let's look</button>`);
+  $("cont").addEventListener("click", cxNext);
+}
+function cxQuestion() {
+  const { set } = S.cx;
+  const kinds = ["pick", "mean"];
+  const target = set[rnd(set.length)];
+  const other = set.find(x => x !== target);
+  if (groupParts([target, other]).diff[target].length) kinds.push("part");
+  // meanings that overlap can't be told apart by choosing between them
+  const distinct = set.every((x, i) => set.every((y, j) => i === j || !overlaps(K[x][0], K[y][0])));
+  let kind = kinds.filter(x => x !== S.cx.last && (x !== "mean" || distinct));
+  kind = kind.length ? kind[rnd(kind.length)] : "pick";
+  return { kind, target, other };
+}
+function cxNext() {
+  const c = S.cx;
+  if (c.streak >= CX_GOAL || c.n >= CX_MAX) return cxDone();
+  const q = c.q = cxQuestion();
+  c.last = q.kind; c.n++;
+  const R = S.round;
+  S.phase = "cx"; S.locked = false;
+  const progress = `<p class="sub">${"●".repeat(c.streak)}${"○".repeat(CX_GOAL - c.streak)} in a row</p>`;
+  if (q.kind === "pick") {
+    R.opts = shuffle(c.set.slice());
+    card(`<p class="q">look closer · which one means…</p><p class="verdict"><b>${K[q.target][0]}</b></p>
+      <div class="choices fam">${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${x}</span></button>`).join("")}</div>
+      <p class="check" id="check"></p>${progress}`);
+  } else if (q.kind === "mean") {
+    R.opts = shuffle(c.set.slice());
+    card(`<p class="q">look closer · what does it mean?</p><div class="glyph">${q.target}</div>
+      <div class="choices">${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="txt">${K[x][0]}</span></button>`).join("")}</div>
+      <p class="check" id="check"></p>${progress}`);
+  } else {
+    const pool = new Set(c.set.flatMap(ownParts));
+    groupParts(c.set).shared.forEach(x => pool.add(x));
+    R.opts = shuffle([...pool].filter(x => !c.set.includes(x) || groupParts([q.target, q.other]).diff[q.target].includes(x))).slice(0, 8);
+    card(`<p class="q">look closer · what does <span class="g">${q.target}</span> have that <span class="g">${q.other}</span> doesn't?</p>
+      <div class="lglyphs"><span class="on">${q.target}</span><span>${q.other}</span></div>
+      <div class="choices fam">${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${x}</span><span class="m">${D.parts[x] || (K[x] ? K[x][0] : "")}</span></button>`).join("")}</div>
+      <p class="check" id="check"></p>${progress}`);
+  }
+  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerCx(+b.dataset.i)));
+}
+function answerCx(i) {
+  const R = S.round, c = S.cx, q = c.q;
+  if (S.phase !== "cx" || S.locked || i >= R.opts.length) return;
+  S.locked = true;
+  const x = R.opts[i];
+  const ok = q.kind === "part" ? groupParts([q.target, q.other]).diff[q.target].includes(x) : x === q.target;
+  record({ step: "contrast", k: q.target, focus: c.k, kind: q.kind, picked: x, ok });
+  const btn = document.querySelectorAll(".choice")[i];
+  if (ok) {
+    c.streak++;
+    btn.classList.add("right");
+    $("check").innerHTML = `✓ ${q.kind === "part" ? `${x}: ${D.parts[x] || (K[x] ? K[x][0] : "")}` : `${q.target} ${K[q.target][0]}`}${whyHTML(q.target)}`;
+    setTimeout(cxNext, 1300);
+    return;
+  }
+  c.streak = 0;
+  btn.classList.add("wrong"); shake(btn);
+  const wrongOne = q.kind === "part" ? q.other : x;
+  S.phase = "cxfb";
+  $("check").innerHTML = "";
+  const msg = q.kind === "pick" ? `<b>${K[q.target][0]}</b> is <span class="g">${q.target}</span>; <span class="g">${x}</span> is ${K[x][0]}.`
+    : q.kind === "mean" ? `<span class="g">${q.target}</span> is <b>${K[q.target][0]}</b>; “${K[x][0]}” is <span class="g">${x}</span>.`
+    : `<span class="g">${q.target}</span> has ${groupParts([q.target, q.other]).diff[q.target].join(" ")} that <span class="g">${q.other}</span> doesn't.`;
+  const box = document.querySelector("#card .step");
+  if (box && box.insertAdjacentHTML) box.insertAdjacentHTML("beforeend", `<div class="cxmiss"><p class="miss-note">Not that one: ${msg}</p>
+    ${compareHTML(q.target, wrongOne === q.target ? q.other : wrongOne)}
+    <button class="next" type="button" id="cxcont" data-focus>Again</button></div>`);
+  const b = $("cxcont");
+  if (b) { b.addEventListener("click", cxNext); b.focus && b.focus(); }
+}
+function cxDone() {
+  const c = S.cx;
+  record({ step: "contrast_done", k: c.k, set: c.set, asked: c.n, got: c.streak >= CX_GOAL });
+  S.phase = "cxdone";
+  card(`
+    <p class="q">look closer</p>
+    <p class="verdict">${c.streak >= CX_GOAL ? `✓ You tell them apart now.` : `That's enough for now: they'll come back.`}</p>
+    ${groupHTML(c.set, c.k)}
+    <button class="next" type="button" id="cont" data-focus>Continue</button>`);
+  $("cont").addEventListener("click", cxFinish);
+}
+function cxFinish() {
+  if (S.phase !== "cxdone") return;
+  const then = S.cx.then;
+  S.cx = null; S.phase = null;
+  then();
 }
 
 // ======================= lessons: a sound family taught before it's ever asked
@@ -1819,7 +1904,9 @@ document.addEventListener("keydown", e => {
   if (S.phase === "lpick" && /^[1-9]$/.test(e.key)) { e.preventDefault(); toggleLookPart(+e.key - 1); return; }
   if (S.phase === "lpick" && e.key === "Enter") { e.preventDefault(); checkLookPick(); return; }
   if (S.phase === "lcompare" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); lookAdvance(); return; }
-  if (S.phase === "lchoose" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerLookChoose(+e.key - 1); return; }
+  if (S.phase === "cx" && /^[1-9]$/.test(e.key)) { e.preventDefault(); answerCx(+e.key - 1); return; }
+  if (S.phase === "cxfb" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); cxNext(); return; }
+  if (S.phase === "cxdone" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); cxFinish(); return; }
   if (S.phase === "lrev" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerLookRev(+e.key - 1); return; }
   if (S.phase === "review" && e.key === "r" && S.overrule) { e.preventDefault(); S.overrule(); return; }
   if (S.phase === "review" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueReview(); return; }
@@ -1841,7 +1928,7 @@ document.addEventListener("keydown", e => {
   if (S.phase === "breading" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerBuildReading(+e.key - 1); return; }
   if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (["meaning", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick", "lchoose"].includes(S.phase)) {
+  } else if (["meaning", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick", "cx", "cxfb", "cxdone"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });
