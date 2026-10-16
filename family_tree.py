@@ -97,6 +97,10 @@ data["parts"] = {c: (q.short(kanji[c]["text"]) if c in kanji else
                  for c in used}
 if "sound" in data:
     data["partOn"] = {c: on(c)[0] for c in used if on(c)}
+    # the meaning parts to learn first: most often the 'meaning' half of a kanji that has a sound part
+    mcount = collections.Counter(c for k, r in roles.items() if "s" in r.values()
+                                 for c, role in r.items() if role == "m")
+    data["meaningRadicals"] = [[c, data["parts"].get(c, "")] for c, _ in mcount.most_common(24)]
 blob = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 assert "</script" not in blob
 tpl = sys.argv[3] if len(sys.argv) > 3 else "family_tree_template.html"

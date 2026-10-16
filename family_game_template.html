@@ -127,6 +127,23 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 .ghost { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 10px; padding: 10px 18px; cursor: pointer; }
 
+details.guide { background: var(--sheet); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
+details.guide summary { cursor: pointer; font-weight: 600; }
+details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 60ch; }
+.rads { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; margin-top: 10px; }
+.rads span { display: flex; align-items: baseline; gap: 6px; font-size: .8rem; color: var(--muted); }
+.rads b { font-family: var(--glyph); font-size: 1.3rem; color: var(--ink); font-weight: 700; }
+.lesson { display: grid; gap: 8px; width: 100%; text-align: left; }
+.lrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 12px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--sheet); }
+.lrow .cg { font-family: var(--glyph); font-weight: 700; font-size: 2.2rem; line-height: 1; }
+.lrow .eq { font-size: .9rem; color: var(--muted); }
+.lrow .res { margin-left: auto; font-size: .9rem; text-align: right; }
+.lrow .res b { display: block; font-size: 1.05rem; color: var(--indigo); }
+.bigsound { display: flex; align-items: baseline; gap: 14px; justify-content: center; }
+.bigsound .glyph { font-size: 4.6rem; color: var(--indigo); }
+.bigsound .r { font-size: 2rem; font-weight: 600; color: var(--indigo); }
+.radtag { font-size: .85rem; color: var(--muted); margin: 0; max-width: 46ch; }
+.radtag b { font-family: var(--glyph); font-size: 1.2rem; color: var(--ink); }
 .enter { animation: rise .2s ease-out; }
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (max-width: 480px) { .glyph { font-size: 4.8rem; } h1 { font-size: 1.5rem; } }
@@ -148,6 +165,16 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
     <div class="setting"><span>levels</span><div class="chips" id="g-level"></div></div>
     <div class="setting"><span>mode</span><div class="chips" id="g-mode"></div></div>
     <div class="setting"><span>meanings</span><div class="chips" id="g-mean"></div></div>
+    <details class="guide" id="guide">
+      <summary>How to spot the part that gives the sound</summary>
+      <ol>
+        <li><b>Find the meaning part first.</b> It's almost always one of a small set (below). In 91% of kanji that have a sound part, the other part is one of these.</li>
+        <li><b>What's left is usually the sound,</b> most often on the right (60%), sometimes on top, left or bottom.</li>
+        <li><b>Check it:</b> half the time the sound part is a kanji you already know, and its siblings share its reading: 青 せい → 晴 清 精 請 情 静, all せい.</li>
+        <li>About a third of kanji have no usable sound part (it shifted on the way into Japanese); learn those readings through words.</li>
+      </ol>
+      <div class="rads" id="rads"></div>
+    </details>
     <button class="start" id="start" type="button">Start</button>
     <div class="map" aria-label="Your tree">
       <div class="setting"><span>your tree</span></div>
@@ -189,6 +216,7 @@ const S = {
   built: new Set(store.get("built", [])),
   builtSound: new Set(store.get("builtSound", [])),
   builtKanji: new Set(store.get("builtKanji", [])),
+  learnedSound: new Set(store.get("learnedSound", [])),
   best: store.get("best", 0),
   streak: 0,
   round: null,
@@ -228,6 +256,7 @@ const dbReady = (window.claude && window.claude.use ? window.claude.use("db") : 
       (p.built || []).forEach(f => S.built.add(f));
       (p.builtSound || []).forEach(f => S.builtSound.add(f));
       (p.builtKanji || []).forEach(k => S.builtKanji.add(k));
+      (p.learnedSound || []).forEach(f => S.learnedSound.add(f));
       if ((p.best || 0) > S.best) S.best = p.best;
       store.set("built", [...S.built]); store.set("best", S.best);
       renderHome();
@@ -246,7 +275,7 @@ function flushResults() {
   const db = results.db;
   if (!db) return;
   const body = { started: results.started, updated: new Date().toISOString(), events: results.events.slice() };
-  const progress = { built: [...S.built], builtSound: [...S.builtSound], builtKanji: [...S.builtKanji], best: S.best, updated: body.updated };
+  const progress = { built: [...S.built], builtSound: [...S.builtSound], builtKanji: [...S.builtKanji], learnedSound: [...S.learnedSound], best: S.best, updated: body.updated };
   const docId = results.id + (results.part ? "-" + results.part : "");
   // a very long visit moves on to a fresh document once this one is saved (documents cap at 256 KiB)
   if (results.events.length > 1500) { results.part++; results.events = []; }
@@ -362,7 +391,7 @@ function startRound() {
   }
   const tiles = shuffle(fams.flatMap(f => tilesOf(f).slice(0, 5).map(k => ({ k, f }))));
   S.round = { fams, parent, tiles, i: 0, results: [], missedFams: new Set() };
-  familyStep();
+  isSound() ? teachThen(fams, null, familyStep) : familyStep();
 }
 
 // step 1: which family?
@@ -371,7 +400,7 @@ function familyStep() {
   const [gloss, lv, st] = K[k];
   S.phase = "family"; S.locked = false;
   renderBar();
-  const hint = isSound() ? `${gloss} · find the part that gives its sound`
+  const hint = isSound() ? `${gloss} · find the part that gives its sound <span class="radtag">(h: hint)</span>`
     : st === "new" ? `new to you: ${gloss}`
     : R.parent ? `cousins under ${R.parent}${F[R.parent].m ? " (" + F[R.parent].m + ")" : ""}: find the part that differs`
     : lv.toUpperCase();
@@ -393,7 +422,8 @@ function answerFamily(f) {
   const { k, f: right } = R.tiles[R.i];
   const ok = f === right;
   R.results.push({ fam: ok, mean: null });
-  record({ step: isSound() ? "sound_family" : "family", k, status: K[k][2], right, picked: f, ok });
+  record({ step: isSound() ? "sound_family" : "family", k, status: K[k][2], right, picked: f, ok, hinted: !!R.hinted });
+  R.hinted = false;
   const ask = isSound() || (S.meanings && K[k][2] !== "new");
   const second = isSound() ? readingStep : meaningStep;
   if (ok) {
@@ -589,9 +619,11 @@ function startBuild() {
 }
 function buildTileStart() {
   const R = S.round, { k } = R.tiles[R.i];
-  R.steps = buildSteps(k); R.si = 0;
+  R.steps = buildSteps(k); R.si = 0; R.hinted = false;
   R.results.push({ k, parts: null, sound: null, mean: null, reading: null });
-  buildRun();
+  renderBar();
+  const f = soundFamilyOf(k);
+  f ? teachThen([f], k, buildRun) : buildRun();
 }
 function buildRun() {
   const R = S.round, step = R.steps[R.si];
@@ -683,7 +715,7 @@ function soundPartStep() {
   card(`
     <p class="q">which part gives its sound?</p>
     <div class="glyph">${k}</div>
-    <p class="hint"></p>
+    <p class="hint"><span class="radtag">h: show which parts are meaning parts</span></p>
     <div class="choices fam" role="group" aria-label="Parts">
       ${R.opts.map((c, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${c}</span><span class="m">${D.parts[c] || ""}${D.partOn && D.partOn[c] ? " · " + D.partOn[c] : ""}</span></button>`).join("")}
     </div>
@@ -698,7 +730,7 @@ function answerSoundPart(i) {
   const right = Object.keys(D.roles[k]).find(c => D.roles[k][c] === "s");
   const ok = R.opts[i] === right;
   R.results[R.results.length - 1].sound = ok;
-  record({ step: "build_sound", k, status: K[k][2], right, picked: R.opts[i], ok });
+  record({ step: "build_sound", k, status: K[k][2], right, picked: R.opts[i], ok, hinted: !!R.hinted });
   if (ok) {
     S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
@@ -791,6 +823,57 @@ function endBuild() {
   $("home-btn").addEventListener("click", goHome);
 }
 
+// ======================= lessons: a sound family taught before it's ever asked
+const RADS = new Set((D.meaningRadicals || []).map(r => r[0]));
+function soundFamilyOf(k) {
+  const snd = Object.keys((D.roles && D.roles[k]) || {}).find(c => D.roles[k][c] === "s");
+  return snd && SND[snd] && SND[snd].k.includes(k) ? snd : null;
+}
+// one member as 'meaning part + sound part -> meaning, reading'
+function lessonRow(f, k) {
+  const parts = K[k][3] || [];
+  const meaningParts = parts.filter(c => c !== f);
+  return `<div class="lrow"><span class="cg">${k}</span>
+    <span class="eq">${meaningParts.map(c => partChip(k, c, "")).join(" + ") || ""} + ${partChip(k, f, "")}</span>
+    <span class="res"><b>${SND[f].a[k]}</b>${K[k][0]}</span></div>`;
+}
+function lessonCard(f, skip, after) {
+  const members = SND[f].k.filter(k => k !== skip).slice(0, 6);
+  S.phase = "lesson";
+  S.afterLesson = () => { S.learnedSound.add(f); store.set("learnedSound", [...S.learnedSound]); after(); };
+  card(`
+    <p class="q">new sound family</p>
+    <div class="bigsound"><span class="glyph">${f}</span><span class="r">${SND[f].r}</span></div>
+    <p class="hint">${D.parts[f] ? `${f} (${D.parts[f]})` : f} gives its sound to every kanji below. The other part carries the meaning.</p>
+    <div class="lesson">${members.map(k => lessonRow(f, k)).join("")}</div>
+    <button class="next" type="button" id="cont" data-focus>Got it</button>
+    <p class="sub">or press Enter</p>`);
+  $("cont").addEventListener("click", continueLesson);
+}
+function continueLesson() {
+  if (S.phase !== "lesson") return;
+  S.phase = null;
+  const next = S.afterLesson;
+  S.afterLesson = null;
+  next();
+}
+// teach every not-yet-learned family in `fams` in turn, then go on
+function teachThen(fams, skip, after) {
+  const todo = fams.filter(f => f && !S.learnedSound.has(f) && SND[f] && SND[f].k.filter(k => k !== skip).length >= 1);
+  const step = i => i < todo.length ? lessonCard(todo[i], skip, () => step(i + 1)) : after();
+  step(0);
+}
+// the 'h' hint on a sound question: mark which parts are meaning parts, so the rule does the work
+function radicalHint(k) {
+  const rads = (K[k][3] || []).filter(c => RADS.has(c) || (D.roles && D.roles[k] && D.roles[k][c] === "m"));
+  const el = document.querySelector(".hint");
+  if (!el) return;
+  el.innerHTML = rads.length
+    ? `<span class="radtag">${rads.map(c => `<b>${c}</b> ${D.parts[c] || ""}`).join(", ")} ${rads.length > 1 ? "are meaning parts" : "is a meaning part"}, so the sound comes from what's left</span>`
+    : `<span class="radtag">no common meaning part here; look for a part that is a kanji you can read</span>`;
+  S.round.hinted = true;
+}
+
 // one exit from any feedback screen, whether by click, Enter on the button, or Enter anywhere
 function continueReview() {
   if (S.phase !== "review") return;
@@ -880,6 +963,10 @@ document.addEventListener("keydown", e => {
   if (S.phase === "review" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueReview(); return; }
   // a quick second Enter from the last feedback screen shouldn't skip past the summary
   if (S.phase === "summary" && e.key === "Enter") { e.preventDefault(); if (Date.now() - S.summaryAt > 500) startRound(); return; }
+  if (S.phase === "lesson" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueLesson(); return; }
+  if ((S.phase === "soundpart" || (S.phase === "family" && isSound())) && e.key === "h") {
+    e.preventDefault(); radicalHint(S.round.tiles[S.round.i].k); return;
+  }
   if (S.phase === "parts" && /^[1-9]$/.test(e.key)) { e.preventDefault(); togglePart(+e.key - 1); return; }
   if (S.phase === "parts" && e.key === "Enter") { e.preventDefault(); checkParts(); return; }
   if (S.phase === "soundpart" && /^[1-9]$/.test(e.key)) { e.preventDefault(); answerSoundPart(+e.key - 1); return; }
@@ -899,5 +986,7 @@ document.addEventListener("keydown", e => {
 $("foot").textContent =
   `Built from your Japanese vault on ${D.generated}: the same families as the Kanji Family Tree and the quiz's --clusters mode. ` +
   `Kanji you haven't started show their meaning; ones you know or are learning are asked for it after you sort them.`;
+$("rads").innerHTML = (D.meaningRadicals || []).map(([c, m]) => `<span><b>${c}</b>${m}</span>`).join("");
+$("guide").hidden = !(D.meaningRadicals || []).length;
 renderHome();
 </script>

@@ -2,6 +2,8 @@ import collections, json
 
 VOICE = str.maketrans("がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ",
                       "かきくけこさしすせそたちつてとはひふへほはひふへほ")
+# full-form parts that are usually meaning parts but do act as the sound in common kanji (問 聞)
+PHONETIC_OK = {"門"}
 SEMANTIC = set("氵扌言訁忄心糸木金釒口日月火灬土女亻人彳辶宀艹⺮竹疒衤礻示貝刂力門雨頁足𧾷⻖阝犭禾米車馬魚鳥石目耳手衣飠食虫隹山王玉囗广尸冫歹殳攵欠戈弓巾皿穴立舟角酉革")
 
 
@@ -22,6 +24,10 @@ def build(kanji, pool, db):
                 by_comp[c].append(k)
     fams = {}
     for c, ks in by_comp.items():
+        # a meaning part (氵 扌 艹 口...) doesn't give the sound: several water kanji sharing
+        # a reading is a coincidence, not a sound family
+        if c in SEMANTIC and c not in PHONETIC_OK:
+            continue
         own = on(c)
         cands = own or sorted({r for k in ks for r in on(k)})
         best = None
@@ -38,7 +44,8 @@ def build(kanji, pool, db):
         comps = kanji[k]["comps"]
         snd = next((c for c in comps if c in fams and k in fams[c]["k"]), None)
         if snd is None:
-            snd = next((c for c in comps if c != k and set(map(key, on(k))) & set(map(key, on(c)))), None)
+            snd = next((c for c in comps if c != k and (c not in SEMANTIC or c in PHONETIC_OK)
+                        and set(map(key, on(k))) & set(map(key, on(c)))), None)
         r = {}
         for c in comps:
             if c == snd:
