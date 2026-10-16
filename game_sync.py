@@ -53,6 +53,7 @@ new.sort(key=lambda p: p[0].get("t", 0))
 
 real_today = q.today
 lapses, reviews, early, unstarted, known_missed, matured = [], [], 0, 0, [], []
+new_looks = []
 w_started, w_lapses, w_reviews, w_early, w_matured, w_known_missed = [], [], [], 0, [], []
 for e, sid in new:
     if e.get("step") == "word" and e.get("w") in vocab:
@@ -82,6 +83,15 @@ for e, sid in new:
     if e.get("step") != "meaning" or e.get("k") not in kanji:
         continue
     k, ok = e["k"], e["ok"]
+    # a pick that shares a part with the kanji (or is one: 然/燃) is a confusion observed:
+    # both notes list it under Lookalikes
+    other = e.get("picked")
+    if not ok and other in kanji and other != k and (set(kanji[k]["comps"]) & set(kanji[other]["comps"])
+                                                      or other in kanji[k]["comps"] or k in kanji[other]["comps"]):
+        if other not in kanji[k]["lookalikes"] or k not in kanji[other]["lookalikes"]:
+            q.add_lookalike(kanji[k], other)
+            q.add_lookalike(kanji[other], k)
+            new_looks.append(k + other)
     if kanji[k]["known"]:
         if not ok:
             known_missed.append(k)
@@ -119,3 +129,5 @@ if any((w_started, w_lapses, w_reviews, w_early, w_known_missed)):
           f"{' (' + ' '.join(dict.fromkeys(w_lapses)) + ')' if w_lapses else ''}; {len(w_reviews)} due words reviewed; "
           f"{w_early} right but not due; {len(w_matured)} matured to known"
           + (f"; known words missed: {' '.join(dict.fromkeys(w_known_missed))}" if w_known_missed else ""))
+if new_looks:
+    print(f"lookalikes added from your mix-ups: {' '.join(dict.fromkeys(new_looks))}")

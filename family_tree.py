@@ -142,6 +142,10 @@ if os.path.exists(kdb_path):
             r[3] += vstate[w].get("ivl", 0) >= 14
             r[4] += q.is_hard(vstate[w])
     data["vprogress"] = [[lvl] + vprog[lvl] for lvl in q.P["levels"] if vprog[lvl][0]]
+# lookalikes (from the notes; game_sync adds your mix-ups), the meanings a typed answer is graded on, and mnemonics
+data["looks"] = {k: [x for x in kanji[k]["lookalikes"] if x in pool] for k in pool if kanji[k]["lookalikes"]}
+data["answer"] = {k: q.answer_text(kanji[k]["text"]) for k in pool}
+data["mnem"] = {k: kanji[k]["mnemonic"] or kanji[k]["suggested"] for k in pool if kanji[k]["mnemonic"] or kanji[k]["suggested"]}
 used = {c for k in pool for c in kanji[k]["comps"]}
 data["parts"] = {c: (q.short(kanji[c]["text"]) if c in kanji else
                      ("" if cm.get(c, "").startswith("u+") else cm.get(c, "").split(",")[0].strip()))

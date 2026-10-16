@@ -51,6 +51,7 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .prog th:first-child, .prog td:first-child { text-align: left; padding-left: 0; }
 .prog td.pc { color: var(--muted); }
 .prog tr.dim td { color: var(--muted); opacity: .55; }
+.crow .mn { flex-basis: 100%; font-size: .82rem; color: var(--muted); }
 .typed-row { display: flex; gap: 10px; width: 100%; }
 .wtype { flex: 1; min-width: 0; font: inherit; font-size: 1.15rem; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--sheet); color: var(--ink); }
 .wtype:focus { outline: none; border-color: var(--indigo); }
@@ -247,6 +248,7 @@ const S = {
   wseen: store.get("wseen", {}),
   wrev: store.get("wrev", {}),
   wstreak: store.get("wstreak", {}),
+  mixups: store.get("mixups", {}),
   best: store.get("best", 0),
   streak: 0,
   round: null,
@@ -454,6 +456,7 @@ function renderBar() {
 function startRound() {
   if (S.mode === "build") return startBuild();
   if (S.mode === "words") return startWords();
+  if (S.mode === "lookalikes") return startLookalikes();
   const { fams, parent } = pickFamilies();
   show("play");
   if (fams.length < 2) {
@@ -556,6 +559,7 @@ function answerMeaning(i) {
   R.results[R.results.length - 1].mean = ok;
   record({ step: "meaning", k, status: K[k][2], picked: other, ok, options: R.opts.map(o => o.k), due: !!isDue(k) });
   if (ok && (isDue(k) || isHard(k))) { S.reviewed[k] = todayISO(); store.set("reviewed", S.reviewed); }
+  if (!ok) addMixup(k, other);
   if (ok) {
     S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
@@ -1094,7 +1098,13 @@ function wordReadingOptions(w) {
 function wordMeaningOptions(w) {
   const right = W[w][2], ks = wKanji(w), verb = /^to /.test(right);
   const picked = [];
-  const add = x => { const g = W[x][2]; if (picked.length < 3 && x !== w && g && !overlaps(g, right) && !picked.some(o => overlaps(o.g, g))) picked.push({ g, w: x }); };
+  const shown = W[w][0];
+  const close = (a, b) => isMatch(a, b) || isMatch(b, a);
+  const add = x => {
+    const g = W[x][2];
+    if (picked.length < 3 && x !== w && g && !W[x][0].includes(shown) && !shown.includes(W[x][0]) &&
+        !close(g, fullMeaning(w)) && !picked.some(o => close(o.g, g))) picked.push({ g, w: x });
+  };
   for (const x of shuffle(Object.keys(W)).filter(x => ks.some(k => W[x][0].includes(k))).slice(0, 60)) add(x);
   for (const x of shuffle(Object.keys(W)).slice(0, 300)) if (W[x][3] === W[w][3] && /^to /.test(W[x][2]) === verb) add(x);
   return shuffle([{ g: right, w }, ...picked]);
@@ -1286,6 +1296,214 @@ function endWords() {
   $("home-btn").addEventListener("click", goHome);
 }
 
+// ======================= lookalikes: kanji you mix up, side by side, then told apart
+// groups come from the notes' Lookalikes sections (filled from your misses at each sync)
+// plus the mix-ups made in this browser since
+const LOOKS = D.looks || {};
+function addMixup(k, other) {
+  if (!K[other] || other === k) return;
+  for (const [a, b] of [[k, other], [other, k]]) {
+    const l = S.mixups[a] = S.mixups[a] || [];
+    if (!l.includes(b) && !(LOOKS[a] || []).includes(b)) l.push(b);
+  }
+  store.set("mixups", S.mixups);
+}
+function lookLinks(k) {
+  return [...new Set((LOOKS[k] || []).concat(S.mixups[k] || []))].filter(x => K[x] && x !== k);
+}
+function lookGroups() {
+  const rank = k => ({ hard: 0, learning: 1, new: 2, known: 3 })[K[k][2]];
+  const fk = new Set(S.focus === "due" ? focusKanji() : []);
+  const anchors = Object.keys(K).filter(k => inLevel(k) && lookLinks(k).length)
+    .map(k => [lookLinks(k).concat(k).some(x => fk.has(x)) ? 0 : 1, rank(k), Math.random(), k])
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+  const groups = [], used = new Set();
+  for (const [, , , k] of anchors) {
+    if (used.has(k)) continue;
+    const members = [k, ...lookLinks(k).filter(x => !used.has(x))].slice(0, 4);
+    if (members.length < 2) continue;
+    members.forEach(x => used.add(x));
+    groups.push(members);
+    if (groups.length === 2) break;
+  }
+  S.fellBack = S.focus === "due" && fk.size > 0 && !groups.some(g => g.some(x => fk.has(x)));
+  return groups;
+}
+
+function startLookalikes() {
+  show("play");
+  const groups = lookGroups();
+  if (!groups.length) {
+    S.phase = null;
+    card(`<p class="verdict">No lookalikes at this level yet. They're added from the kanji you mix up in the other modes.</p>
+      <button class="next" type="button" id="home-btn" data-focus>Back</button>`);
+    $("home-btn").addEventListener("click", goHome);
+    return;
+  }
+  const tiles = [];
+  groups.forEach((g, gi) => {
+    tiles.push({ kind: "compare", g, gi });
+    shuffle(g.slice()).forEach(k => tiles.push({ kind: "type", k, g, gi }));
+    shuffle(g.slice()).forEach(k => tiles.push({ kind: "rev", k, g, gi }));
+  });
+  S.round = { looks: true, groups, fams: [], tiles, i: 0, results: [], missedFams: new Set(),
+              notice: S.fellBack ? "nothing due here: other lookalikes" : "" };
+  lookTile();
+}
+function lookTile() {
+  const R = S.round, t = R.tiles[R.i];
+  renderBar();
+  if (t.kind === "compare") return lookCompare(t.g);
+  if (t.kind === "type") return lookType(t);
+  return lookRev(t);
+}
+// every member split into parts: a part the whole group shares is faded, the one that tells them apart outlined
+function groupHTML(g, mark) {
+  const shared = (K[g[0]][3] || []).filter(c => g.every(x => (K[x][3] || []).includes(c)));
+  return `<div class="compare">${g.map(x => `<div class="crow ${x === mark ? "right" : ""}">
+    <span class="cg">${x}</span>
+    <span class="cm"><b>${x === mark ? "this one" : K[x][2]}</b>${K[x][0]}</span>
+    <span class="parts">${(K[x][3] || []).map(c => partChip(x, c, shared.includes(c) ? "same" : "diff")).join("")}</span>
+    ${D.mnem && D.mnem[x] ? `<span class="mn">${D.mnem[x]}</span>` : ""}
+  </div>`).join("")}</div>`;
+}
+function lookCompare(g) {
+  S.phase = "lcompare";
+  card(`
+    <p class="q">these look alike</p>
+    <p class="hint">Find the part that tells them apart; you'll be asked each one's meaning next.</p>
+    ${groupHTML(g)}
+    <button class="next" type="button" id="cont" data-focus>Got it</button>
+    <p class="sub">or press Enter</p>`);
+  $("cont").addEventListener("click", lookAdvance);
+}
+function lookType(t) {
+  S.phase = "ltype"; S.locked = false; S.overrule = null;
+  card(`
+    <p class="q">what does it mean? <span class="typed-tag">type it</span></p>
+    <div class="glyph">${t.k}</div>
+    <div class="typed-row">
+      <input id="ltype" class="wtype" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" lang="en"
+        aria-label="Meaning" placeholder="meaning in English" data-focus>
+      <button class="next" type="button" id="lcheck">Check</button>
+    </div>
+    <p class="check" id="check"></p>
+    <p class="sub">one of its meanings is enough · Enter to check, empty to give up</p>`);
+  $("ltype").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); checkLook(); } });
+  $("lcheck").addEventListener("click", checkLook);
+}
+const kAnswer = k => (D.answer && D.answer[k]) || K[k][0];
+function checkLook() {
+  const R = S.round, t = R.tiles[R.i];
+  if (S.phase !== "ltype" || S.locked) return;
+  S.locked = true;
+  const k = t.k, guess = $("ltype").value.trim();
+  const ok = !!guess && isMatch(guess, kAnswer(k));
+  const other = guess && !ok ? t.g.find(x => x !== k && isMatch(guess, kAnswer(x))) : null;
+  const res = { k, ok, retry: !!t.retry, gi: t.gi };
+  R.results.push(res);
+  const done = () => {
+    record({ step: "meaning", k, status: K[k][2], picked: other || null, guess, typed: true, ok: res.ok, due: !!isDue(k) });
+    if (res.ok && (isDue(k) || isHard(k))) { S.reviewed[k] = todayISO(); store.set("reviewed", S.reviewed); }
+    if (!res.ok) t.missed = true;
+    lookAdvance();
+  };
+  if (ok) {
+    S.streak++; bumpBest();
+    $("check").textContent = `✓ ${kAnswer(k)}`;
+    setTimeout(done, 1000);
+    return;
+  }
+  S.streak = 0;
+  S.phase = "review";
+  S.overrule = () => { res.ok = true; S.overrule = null; continueReview(); };
+  card(`
+    <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> means <b>${kAnswer(k)}</b>.
+      ${other ? `“${guess.replace(/</g, "&lt;")}” is <span class="g">${other}</span>.` : guess ? `You typed “${guess.replace(/</g, "&lt;")}”.` : ""}</p>
+    ${other ? compareHTML(k, other) : groupHTML(t.g, k)}
+    <div class="row">
+      <button class="next" type="button" id="cont" data-focus>Continue</button>
+      ${guess && !other ? `<button class="ghost" type="button" id="overrule">I was right (r)</button>` : ""}
+    </div>`);
+  if (other) S.overrule = null;
+  S.afterReview = done;
+  $("cont").addEventListener("click", continueReview);
+  if (guess && !other) $("overrule").addEventListener("click", () => S.overrule && S.overrule());
+}
+// the other way round: the meaning, and which of the group it is
+function lookRev(t) {
+  const R = S.round;
+  R.opts = shuffle(t.g.slice());
+  S.phase = "lrev"; S.locked = false;
+  card(`
+    <p class="q">which one means…</p>
+    <p class="verdict"><b>${K[t.k][0]}</b></p>
+    <div class="choices fam" role="group" aria-label="Kanji">
+      ${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${x}</span></button>`).join("")}
+    </div>
+    <p class="check" id="check"></p>`);
+  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerLookRev(+b.dataset.i)));
+}
+function answerLookRev(i) {
+  const R = S.round, t = R.tiles[R.i];
+  if (S.phase !== "lrev" || S.locked || i >= R.opts.length) return;
+  S.locked = true;
+  const picked = R.opts[i], ok = picked === t.k;
+  record({ step: "look_reverse", k: t.k, picked, ok });
+  R.results.push({ k: t.k, rev: true, ok, retry: !!t.retry, gi: t.gi });
+  if (ok) {
+    S.streak++; bumpBest();
+    document.querySelectorAll(".choice")[i].classList.add("right");
+    $("check").textContent = `✓ ${t.k}`;
+    setTimeout(lookAdvance, 650);
+  } else {
+    S.streak = 0; t.missed = true;
+    S.phase = "review";
+    card(`
+      <p class="verdict"><span class="no">✗</span> <b>${K[t.k][0]}</b> is <span class="g">${t.k}</span>; <span class="g">${picked}</span> is ${K[picked][0]}.</p>
+      ${compareHTML(t.k, picked)}
+      <button class="next" type="button" id="cont" data-focus>Continue</button>`);
+    S.afterReview = lookAdvance;
+    $("cont").addEventListener("click", continueReview);
+  }
+}
+function lookAdvance() {
+  const R = S.round, t = R.tiles[R.i];
+  if (S.phase === "lcompare") S.phase = null;
+  // a miss is asked again at the end of its group, once
+  if (t.missed && !t.retry) {
+    let end = R.i + 1;
+    while (end < R.tiles.length && R.tiles[end].gi === t.gi) end++;
+    R.tiles.splice(end, 0, { ...t, missed: false, retry: true });
+  }
+  R.i++;
+  R.i < R.tiles.length ? lookTile() : endLookalikes();
+}
+function endLookalikes() {
+  const R = S.round;
+  record({ step: "round", groups: R.groups });
+  flushResults();
+  const first = R.results.filter(r => !r.retry);
+  S.phase = "summary";
+  S.summaryAt = Date.now();
+  renderBar();
+  $("b-track").style.width = "100%";
+  card(`
+    <p class="q">round done</p>
+    <p class="verdict">${first.filter(r => r.ok).length} of ${first.length} told apart first time</p>
+    <div class="fams">${R.groups.map((g, gi) => {
+      const rs = first.filter(r => r.gi === gi), clean = rs.every(r => r.ok);
+      return `<div class="fam ${clean ? "built" : ""}"><b>${g.join("")}</b><span>${clean ? "told apart" : "mixed up: " + [...new Set(rs.filter(r => !r.ok).map(r => r.k))].join("")}</span></div>`;
+    }).join("")}</div>
+    <div class="row">
+      <button class="next" type="button" id="again" data-focus>Next round</button>
+      <button class="ghost" type="button" id="home-btn">Back to start</button>
+    </div>
+    <p class="sub">Enter for the next round</p>`);
+  $("again").addEventListener("click", startRound);
+  $("home-btn").addEventListener("click", goHome);
+}
+
 // ======================= lessons: a sound family taught before it's ever asked
 const RADS = new Set((D.meaningRadicals || []).map(r => r[0]));
 function soundFamilyOf(k) {
@@ -1354,6 +1572,7 @@ function nextTile() {
   const R = S.round;
   if (R.build) return buildAdvance();
   if (R.words) return wordAdvance();
+  if (R.looks) return lookAdvance();
   requeueIfMissed(R);
   R.i++;
   R.i < R.tiles.length ? familyStep() : endRound();
@@ -1417,7 +1636,11 @@ function renderHome() {
       `<tr class="${lv.includes(l) ? "" : "dim"}"><td>${l.toUpperCase()}</td><td>${kn}/${t}</td><td class="pc">${Math.floor(100 * kn / t)}%</td>` +
       `<td>${st}</td><td>${close}</td><td>${hard}</td><td>${t - kn - st}</td></tr>`).join("") : "";
   const fk = focusKanji();
-  if (S.mode === "words") {
+  if (S.mode === "lookalikes") {
+    const n = Object.keys(K).filter(k => inLevel(k) && lookLinks(k).length).length;
+    $("due-note").textContent = `${n} kanji at ${S.level.toUpperCase()} with lookalikes, from your misses` +
+      (Object.keys(S.mixups).length ? ` (${Object.keys(S.mixups).length} added here since the last sync)` : "") + `. Due & hard puts groups with due kanji first.`;
+  } else if (S.mode === "words") {
     const dw = dueWords(), started = Object.keys(S.wseen).filter(w => !VS[w]).length;
     $("due-note").textContent = `${dw.length} words due at ${S.level.toUpperCase()}` +
       (started ? `; ${started} started here since the last sync` : "") + `. New words come from kanji you know or are learning.`;
@@ -1442,7 +1665,7 @@ function chipGroup(id, options, current, onPick) {
 
 chipGroup("g-level", Object.keys(LEVEL_SETS).map(l => [l, l.toUpperCase()]), S.level, v => { S.level = v; store.set("level", v); renderHome(); });
 chipGroup("g-focus", [["due", "Due & hard"], ["all", "Everything"]], S.focus, v => { S.focus = v; store.set("focus", v); renderHome(); });
-chipGroup("g-mode", [["families", "Families"], ["cousins", "Cousins (harder)"]].concat(HAS_SOUND ? [["sounds", "Sounds (readings)"]] : [], [["build", "Build (whole kanji)"]], HAS_WORDS ? [["words", "Words (readings)"]] : []),
+chipGroup("g-mode", [["families", "Families"], ["cousins", "Cousins (harder)"]].concat(HAS_SOUND ? [["sounds", "Sounds (readings)"]] : [], [["build", "Build (whole kanji)"]], HAS_WORDS ? [["words", "Words (readings)"]] : [], [["lookalikes", "Lookalikes"]]),
   S.mode, v => { S.mode = v; store.set("mode", v); renderHome(); });
 chipGroup("g-mean", [["true", "On"], ["false", "Off"]], S.meanings, v => { S.meanings = v === "true"; store.set("meanings", S.meanings); });
 $("start").addEventListener("click", startRound);
@@ -1450,7 +1673,9 @@ $("quit").addEventListener("click", goHome);
 
 document.addEventListener("keydown", e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (S.phase === "wtype") { if (e.key === "Escape") goHome(); return; }
+  if (S.phase === "wtype" || S.phase === "ltype") { if (e.key === "Escape") goHome(); return; }
+  if (S.phase === "lcompare" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); lookAdvance(); return; }
+  if (S.phase === "lrev" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerLookRev(+e.key - 1); return; }
   if (S.phase === "review" && e.key === "r" && S.overrule) { e.preventDefault(); S.overrule(); return; }
   if (S.phase === "review" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueReview(); return; }
   // a quick second Enter from the last feedback screen shouldn't skip past the summary
@@ -1475,7 +1700,7 @@ document.addEventListener("keydown", e => {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerReading(+e.key - 1); }
   } else if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning"].includes(S.phase)) {
+  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });
