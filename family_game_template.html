@@ -131,6 +131,9 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .map .dots i.cur { background: var(--indigo); }
 .map p { margin: 0; font-size: .8rem; color: var(--muted); }
 .foot { font-size: .8rem; color: var(--muted); max-width: 70ch; }
+.saved { font-size: .78rem; color: var(--muted); }
+.saved.on::before { content: "●"; color: var(--good); margin-right: 6px; }
+.saved.off::before { content: "●"; color: var(--line); margin-right: 6px; }
 @media (max-width: 520px) {
   h1 { font-size: 1.45rem; }
   .basket .seal { width: 50px; height: 50px; font-size: 1.9rem; }
@@ -162,6 +165,7 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
     <div class="dots" id="dots"></div>
     <p id="map-note"></p>
   </section>
+  <p class="saved off" id="saved" aria-live="polite">Scores are saved in this browser only.</p>
   <p class="foot" id="foot"></p>
 </div>
 
@@ -186,6 +190,54 @@ const S = {
   score: 0, streak: 0,
   round: null,
 };
+// ---- results kept for analysis: every answer, one document per page visit, written once per round,
+// owner-only (declared rules). Absent db (outside claude.ai, signed out) = this browser only.
+const results = {
+  id: new Date().toISOString().slice(0, 10) + "-" + Math.random().toString(36).slice(2, 8),
+  started: new Date().toISOString(),
+  events: [], part: 0, db: null, chain: Promise.resolve(),
+};
+const dbReady = (window.claude && window.claude.use ? window.claude.use("db") : Promise.resolve(null))
+  .catch(() => null)
+  .then(db => {
+    results.db = db;
+    if (!db) return;
+    setSaved(true);
+    db.doc("progress/state").get().then(snap => {
+      if (!snap.exists) return;
+      const p = snap.data();
+      (p.built || []).forEach(f => S.built.add(f));
+      if ((p.best || 0) > S.best) S.best = p.best;
+      store.set("built", [...S.built]); store.set("best", S.best);
+      renderScore(); renderMap();
+    }).catch(() => {});
+  });
+function setSaved(on, msg) {
+  const el = document.getElementById("saved");
+  el.className = "saved " + (on ? "on" : "off");
+  el.textContent = msg || (on ? "Every answer is saved for Claude to analyse with your quiz logs."
+                              : "Scores are saved in this browser only.");
+}
+function record(e) {
+  results.events.push({ t: Math.round(Date.now() / 1000), level: S.level, mode: S.mode, ...e });
+}
+function flushResults() {
+  const db = results.db;
+  if (!db) return;
+  const body = { started: results.started, updated: new Date().toISOString(), events: results.events.slice() };
+  const progress = { built: [...S.built], best: S.best, updated: body.updated };
+  const docId = results.id + (results.part ? "-" + results.part : "");
+  // a very long visit moves on to a fresh document once this one is saved (documents cap at 256 KiB)
+  if (results.events.length > 1500) { results.part++; results.events = []; }
+  results.chain = results.chain
+    .then(() => db.doc("sessions/" + docId).set(body))
+    .then(() => db.doc("progress/state").set(progress))
+    .catch(err => {
+      if (err && err.code === "quota_exceeded") setSaved(false, "The results store is full; scores are kept in this browser only.");
+      else if (err && (err.code === "revoked" || err.code === "not_granted" || err.code === "invalid_argument")) { results.db = null; setSaved(false); }
+    });
+}
+
 const rnd = n => Math.floor(Math.random() * n);
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = rnd(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
@@ -274,6 +326,7 @@ function answer(f) {
   const { k, f: right } = R.tiles[R.i];
   const ok = f === right;
   R.results.push({ fam: ok, mean: null });
+  record({ step: "family", k, status: K[k][2], right, picked: f, ok });
   const [gloss, , st] = K[k];
   const b = document.querySelector(`.basket[data-f="${f}"]`);
   const rb = document.querySelector(`.basket[data-f="${right}"]`);
@@ -347,6 +400,7 @@ function answerMeaning(i) {
   const { k, f } = R.tiles[R.i];
   const right = K[k][0], other = R.opts[i].k, ok = other === k;
   R.results[R.results.length - 1].mean = ok;
+  record({ step: "meaning", k, status: K[k][2], picked: other, ok, options: R.opts.map(o => o.k) });
   const btns = document.querySelectorAll(".opt");
   btns[R.opts.findIndex(o => o.k === k)].classList.add("right");
   const fb = document.getElementById("fb");
@@ -391,6 +445,8 @@ function endRound() {
   const builtNow = R.fams.filter(f => !R.missedFams.has(f));
   builtNow.forEach(f => S.built.add(f));
   store.set("built", [...S.built]);
+  record({ step: "round", families: R.fams, rebuilt: builtNow, parent: R.parent || null });
+  flushResults();
   const right = R.results.filter(r => r.fam).length;
   const asked = R.results.filter(r => r.mean !== null), meant = asked.filter(r => r.mean).length;
   document.getElementById("table").innerHTML = `
@@ -470,7 +526,7 @@ function bindSettings() {
 document.getElementById("foot").textContent =
   `Built from your Japanese vault on ${D.generated}: the same families as the Kanji Family Tree and the quiz's --clusters mode. ` +
   `Kanji you haven't started show their meaning; ones you know or are learning are asked for it after you sort them. ` +
-  `A family counts as rebuilt when every kanji in it was sorted and, where asked, given the right meaning. Scores are kept in this browser only.`;
+  `A family counts as rebuilt when every kanji in it was sorted and, where asked, given the right meaning.`;
 bindSettings();
 renderScore();
 newRound();
