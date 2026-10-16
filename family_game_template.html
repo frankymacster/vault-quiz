@@ -85,6 +85,15 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .feedback .ok { color: var(--good); font-weight: 600; }
 .feedback .no { color: var(--bad); font-weight: 600; }
 .feedback .g { font-family: var(--glyph); font-size: 1.1rem; }
+.options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; width: min(520px, 100%); }
+.opt { font: inherit; text-align: left; background: var(--paper); color: var(--ink); border: 1.5px solid var(--line); border-radius: 9px;
+  padding: 9px 12px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.opt .key { font-family: var(--mono); font-size: .7rem; color: var(--muted); }
+.opt:hover { border-color: var(--indigo); }
+.opt.right { border-color: var(--good); background: var(--good-bg); }
+.opt.wrong { border-color: var(--bad); background: var(--bad-bg); }
+.opt:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+@media (max-width: 420px) { .options { grid-template-columns: minmax(0, 1fr); } }
 .queue { display: flex; gap: 5px; justify-content: center; flex-wrap: wrap; }
 .queue i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .queue i.done { background: var(--good); } .queue i.miss { background: var(--bad); } .queue i.now { background: var(--indigo); }
@@ -128,6 +137,7 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
   <div class="settings">
     <div class="group" id="g-level"><span>levels</span></div>
     <div class="group" id="g-mode"><span>mode</span></div>
+    <div class="group" id="g-mean"><span>meanings</span></div>
   </div>
 
   <section class="table" id="table" aria-label="Sorting table"></section>
@@ -155,6 +165,7 @@ const LEVEL_SETS = { "n5–n4": ["n5", "n4"], "n3": ["n3"], "n2": ["n2"], "n1": 
 const S = {
   level: store.get("level", "n5–n4"),
   mode: store.get("mode", "families"),
+  meanings: store.get("meanings", true),
   built: new Set(store.get("built", [])),
   best: store.get("best", 0),
   score: 0, streak: 0,
@@ -202,7 +213,7 @@ function newRound() {
   const { fams, parent } = pickFamilies();
   if (fams.length < 2) { renderEmpty(); return; }
   const tiles = shuffle(fams.flatMap(f => tilesOf(f).slice(0, 5).map(k => ({ k, f }))));
-  S.round = { fams, parent, tiles, i: 0, results: [], missedFams: new Set(), locked: false };
+  S.round = { fams, parent, tiles, i: 0, results: [], missedFams: new Set(), locked: false, phase: "family", opts: null };
   renderTable();
 }
 
@@ -236,8 +247,9 @@ function showTile() {
     <p class="prompt">${showMeaning ? "new to you: which family is it built on?" : "which family is it built on?"} <span style="font-family:var(--mono)">${lv.toUpperCase()}</span></p>
     <div class="feedback" id="fb" aria-live="polite"></div>`;
   document.getElementById("queue").innerHTML = R.tiles.map((_, j) =>
-    `<i class="${j < R.i ? (R.results[j] ? "done" : "miss") : j === R.i ? "now" : ""}"></i>`).join("");
+    `<i class="${j < R.i ? (tileOk(R.results[j]) ? "done" : "miss") : j === R.i ? "now" : ""}"></i>`).join("");
   R.locked = false;
+  R.phase = "family";
 }
 
 function answer(f) {
@@ -246,7 +258,7 @@ function answer(f) {
   R.locked = true;
   const { k, f: right } = R.tiles[R.i];
   const ok = f === right;
-  R.results.push(ok);
+  R.results.push({ fam: ok, mean: null });
   const [gloss, , st] = K[k];
   const b = document.querySelector(`.basket[data-f="${f}"]`);
   const rb = document.querySelector(`.basket[data-f="${right}"]`);
@@ -263,11 +275,75 @@ function answer(f) {
   }
   if (S.streak > S.best) { S.best = S.streak; store.set("best", S.best); }
   renderScore();
+  const ask = S.meanings && st !== "new";
   setTimeout(() => {
     b.classList.remove("right", "wrong"); rb.classList.remove("answer");
-    R.i++;
-    R.i < R.tiles.length ? showTile() : endRound();
+    ask ? showMeaningStep() : advance();
   }, ok ? 650 : 1700);
+}
+
+function advance() {
+  const R = S.round;
+  R.i++;
+  R.i < R.tiles.length ? showTile() : endRound();
+}
+
+const tileOk = r => r.fam && r.mean !== false;
+const words = s => new Set(s.toLowerCase().match(/[a-z']{3,}/g) || []);
+const overlaps = (a, b) => { const A = words(a); return [...words(b)].some(w => A.has(w)); };
+
+function meaningOptions(k) {
+  const R = S.round, right = K[k][0];
+  const fam = R.tiles[R.i].f;
+  const pools = [
+    shuffle(F[fam].k.filter(x => x !== k)),
+    shuffle(R.tiles.map(t => t.k).filter(x => x !== k)),
+    shuffle(Object.keys(K).filter(x => K[x][1] === K[k][1] && x !== k)).slice(0, 60),
+  ];
+  const picked = [];
+  for (const pool of pools) for (const x of pool) {
+    const g = K[x][0];
+    if (picked.length < 3 && g !== right && !picked.includes(g) && !overlaps(g, right)) picked.push(g);
+  }
+  return shuffle([right, ...picked]);
+}
+
+function showMeaningStep() {
+  const R = S.round;
+  const { k } = R.tiles[R.i];
+  R.phase = "meaning";
+  R.opts = meaningOptions(k);
+  document.getElementById("stage").innerHTML = `
+    <div class="tile" aria-label="${k}"><span class="g">${k}</span><span class="s">&nbsp;</span></div>
+    <p class="prompt">and what does it mean?</p>
+    <div class="options" role="group" aria-label="Meanings">${R.opts.map((g, i) =>
+      `<button class="opt" type="button" data-i="${i}"><span class="key">${i + 1}</span><span>${g}</span></button>`).join("")}</div>
+    <div class="feedback" id="fb" aria-live="polite"></div>`;
+  document.querySelectorAll(".opt").forEach(b => b.addEventListener("click", () => answerMeaning(+b.dataset.i)));
+  R.locked = false;
+}
+
+function answerMeaning(i) {
+  const R = S.round;
+  if (!R || R.locked || R.phase !== "meaning") return;
+  R.locked = true;
+  const { k, f } = R.tiles[R.i];
+  const right = K[k][0], ok = R.opts[i] === right;
+  R.results[R.results.length - 1].mean = ok;
+  const btns = document.querySelectorAll(".opt");
+  btns[R.opts.indexOf(right)].classList.add("right");
+  const fb = document.getElementById("fb");
+  if (ok) {
+    S.streak++; S.score += 10 * Math.min(S.streak, 5);
+    fb.innerHTML = `<span class="ok">✓</span> <span class="g">${k}</span> ${right}`;
+  } else {
+    btns[i].classList.add("wrong");
+    S.streak = 0; R.missedFams.add(f);
+    fb.innerHTML = `<span class="no">✗</span> <span class="g">${k}</span> means ${right}`;
+  }
+  if (S.streak > S.best) { S.best = S.streak; store.set("best", S.best); }
+  renderScore();
+  setTimeout(advance, ok ? 650 : 1600);
 }
 
 function endRound() {
@@ -275,10 +351,11 @@ function endRound() {
   const builtNow = R.fams.filter(f => !R.missedFams.has(f));
   builtNow.forEach(f => S.built.add(f));
   store.set("built", [...S.built]);
-  const right = R.results.filter(Boolean).length;
+  const right = R.results.filter(r => r.fam).length;
+  const asked = R.results.filter(r => r.mean !== null), meant = asked.filter(r => r.mean).length;
   document.getElementById("table").innerHTML = `
     <div class="summary">
-      <h2>${right} of ${R.results.length} sorted</h2>
+      <h2>${right} of ${R.results.length} sorted${asked.length ? ` · ${meant} of ${asked.length} meanings` : ""}</h2>
       <div class="fams">${R.fams.map(f => `<div class="fam ${builtNow.includes(f) ? "built" : ""}">
         <b>${f}</b><span>${builtNow.includes(f) ? "rebuilt" : "try again later"}</span><small>${F[f].k.join("")}</small></div>`).join("")}</div>
       <button class="go" id="next" type="button">Next round</button>
@@ -325,9 +402,19 @@ function bindSettings() {
     gm.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", c.dataset.v === S.mode));
     newRound();
   });
+  const gn = document.getElementById("g-mean");
+  gn.insertAdjacentHTML("beforeend", [[true, "On"], [false, "Off"]].map(([v, l]) =>
+    `<button class="chip" type="button" data-v="${v}" aria-pressed="${S.meanings === v}">${l}</button>`).join(""));
+  gn.addEventListener("click", e => {
+    const b = e.target.closest(".chip"); if (!b) return;
+    S.meanings = b.dataset.v === "true"; store.set("meanings", S.meanings);
+    gn.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", (c.dataset.v === "true") === S.meanings));
+  });
   document.addEventListener("keydown", e => {
     if (e.target.closest("input, select, textarea")) return;
-    if (S.round && /^[1-4]$/.test(e.key)) {
+    if (S.round && S.round.phase === "meaning" && /^[1-4]$/.test(e.key)) {
+      e.preventDefault(); answerMeaning(+e.key - 1);
+    } else if (S.round && /^[1-4]$/.test(e.key)) {
       const f = S.round.fams[+e.key - 1];
       if (f) { e.preventDefault(); answer(f); }
     } else if (!S.round && e.key === "Enter" && document.getElementById("next")) {
@@ -338,7 +425,8 @@ function bindSettings() {
 
 document.getElementById("foot").textContent =
   `Built from your Japanese vault on ${D.generated}: the same families as the Kanji Family Tree and the quiz's --clusters mode. ` +
-  `Kanji you haven't started show their meaning; ones you know or are learning don't. Scores and rebuilt families are kept in this browser only.`;
+  `Kanji you haven't started show their meaning; ones you know or are learning are asked for it after you sort them. ` +
+  `A family counts as rebuilt when every kanji in it was sorted and, where asked, given the right meaning. Scores are kept in this browser only.`;
 bindSettings();
 renderScore();
 newRound();
