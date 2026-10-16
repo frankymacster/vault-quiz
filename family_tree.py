@@ -9,7 +9,7 @@ status on every character.
 template defaults to family_tree_template.html; family_game_template.html
 writes the Kanji Family Builder game from the same data.
 """
-import collections, datetime, json, os, re, sys
+import collections, datetime, json, os, re, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -93,8 +93,11 @@ if os.path.exists(kdb_path):
     data["sound"] = sounds
     data["roles"] = roles
 # the quiz's schedule, so the game can aim at what's due: [due date, misses] per kanji in progress
-data["srs"] = {k: [datetime.date.fromordinal(state[k]["due"]).isoformat(), state[k].get("lapses", 0)]
-               for k in pool if k in state and not kanji[k]["known"] and state[k].get("due")}
+card = lambda c: [datetime.date.fromordinal(c["due"]).isoformat(), c.get("lapses", 0), c.get("reps", 0),
+                  c.get("ivl", 0), c.get("ease", 2.5)]
+data["srs"] = {k: card(state[k]) for k in pool if k in state and not kanji[k]["known"] and state[k].get("due")}
+# answers the game made before this moment are already in the schedule above
+data["synced"] = int(time.time())
 # the quiz's end-of-session progress table: [level, total, known, learning, close, hard]
 prog = collections.defaultdict(lambda: [0, 0, 0, 0, 0])
 for k, d in kanji.items():
@@ -129,8 +132,7 @@ if os.path.exists(kdb_path):
     data["words"], data["kun"] = words, kun
     data["stop"] = sorted(q.STOPWORDS)
     data["anchor"] = {k: kanji[k]["anchor"] for k in pool if kanji[k].get("anchor") in words}
-    data["vsrs"] = {w: [datetime.date.fromordinal(c["due"]).isoformat(), c.get("lapses", 0), c.get("reps", 0)]
-                    for w, c in vstate.items() if w in words and not words[w][4] and c.get("due")}
+    data["vsrs"] = {w: card(c) for w, c in vstate.items() if w in words and not words[w][4] and c.get("due")}
     vprog = collections.defaultdict(lambda: [0, 0, 0, 0, 0])
     for w, x in words.items():
         r = vprog[x[3]]

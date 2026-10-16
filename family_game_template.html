@@ -51,6 +51,7 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .prog th:first-child, .prog td:first-child { text-align: left; padding-left: 0; }
 .prog td.pc { color: var(--muted); }
 .prog tr.dim td { color: var(--muted); opacity: .55; }
+.mnem { font-size: .9rem; color: var(--muted); margin: 0; max-width: 52ch; }
 .crow .mn { flex-basis: 100%; font-size: .82rem; color: var(--muted); }
 .typed-row { display: flex; gap: 10px; width: 100%; }
 .wtype { flex: 1; min-width: 0; font: inherit; font-size: 1.15rem; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--sheet); color: var(--ink); }
@@ -68,6 +69,8 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .wu.mark { border-color: var(--indigo); }
 .wu.kana { border-style: dashed; }
 .fam b.wf { font-size: 1.4rem; }
+.prog .delta { font-size: .72rem; color: var(--good); margin-left: 3px; }
+.prog .delta.down { color: var(--muted); }
 .prog-wrap { overflow-x: auto; }
 .stats span { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .setting { display: grid; gap: 8px; }
@@ -246,7 +249,10 @@ const S = {
   focus: store.get("focus", "due"),
   reviewed: store.get("reviewed", {}),
   wseen: store.get("wseen", {}),
-  wrev: store.get("wrev", {}),
+  ov: store.get("ov", {}),
+  wov: store.get("wov", {}),
+  day: store.get("day", {}),
+  introDay: store.get("introDay", {}),
   wstreak: store.get("wstreak", {}),
   mixups: store.get("mixups", {}),
   best: store.get("best", 0),
@@ -259,16 +265,70 @@ const S = {
 if (!LEVEL_SETS[S.level]) S.level = "n5–n4";
 const SND = D.sound || {};
 const HAS_SOUND = Object.keys(SND).length > 0;
-if (!["families", "cousins", "sounds", "build"].includes(S.mode) || (S.mode === "sounds" && !HAS_SOUND)) S.mode = "families";
-// ---- focus: the kanji your quiz has due, and your hard ones (snapshot from the vault at build time)
-const SRS = D.srs || {};
-const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-const isDue = k => SRS[k] && SRS[k][0] <= todayISO() && S.reviewed[k] !== todayISO();
-const isHard = k => SRS[k] && SRS[k][1] >= 3 && S.reviewed[k] !== todayISO();
+if (!["new", "families", "cousins", "sounds", "build", "words", "lookalikes"].includes(S.mode) || (S.mode === "sounds" && !HAS_SOUND)) S.mode = "families";
+// ---- the schedule: your quiz's cards as of the last sync, plus what you've answered here since,
+// applied with the same rules game_sync.py uses, so progress shows before it reaches the vault
+const SRS = D.srs || {}, VS = D.vsrs || {};
+const MATURE = 21, HARD_LAPSES = 3, HARD_STEPS = [1, 3, 7];
+const isoOf = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const todayISO = () => isoOf(new Date());
+const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return isoOf(d); };
+// SM-2 as in quiz.py's schedule()
+function sm2(c, grade) {
+  let { ease = 2.5, reps = 0, ivl = 0, lapses = 0 } = c;
+  if (grade === 1) { reps = 0; ivl = 0; ease = Math.max(1.3, ease - .2); lapses++; }
+  else {
+    const stepping = lapses >= HARD_LAPSES && reps < HARD_STEPS.length;
+    ivl = stepping ? HARD_STEPS[reps] : reps === 0 ? 1 : reps === 1 ? 6 : Math.max(1, Math.round(ivl * ease));
+    reps++;
+  }
+  return { ease: Math.round(ease * 100) / 100, reps, ivl, lapses, due: addDays(ivl) };
+}
+const fromSync = a => a && { due: a[0], lapses: a[1], reps: a[2], ivl: a[3], ease: a[4] };
+// answers already in the vault (made before the last sync) are dropped from the local layer
+for (const key of ["ov", "wov"]) for (const [x, c] of Object.entries(S[key])) if (c.t < (D.synced || 0)) delete S[key][x];
+const kCard = k => S.ov[k] || fromSync(SRS[k]);
+const wCard = w => S.wov[w] || fromSync(VS[w]);
+const kKnown = k => K[k][2] === "known" || !!(S.ov[k] && S.ov[k].known);
+function dayLog() {
+  if (S.day.date !== todayISO()) { S.day = { date: todayISO(), reviews: 0, started: 0, misses: 0, matured: 0, words: 0 }; }
+  return S.day;
+}
+// one answer, as game_sync.py will count it: a miss is a lapse; a right answer moves the card only when due;
+// a first test after studying starts the card
+function applyAnswer(card, ok, fresh) {
+  if (!card) return fresh ? { card: sm2({}, ok ? 3 : 1), what: "started" } : null;
+  if (!ok) return { card: sm2(card, 1), what: "misses" };
+  if (card.due <= todayISO()) return { card: sm2(card, 3), what: "reviews" };
+  return null;
+}
+function countKanji(k, ok, fresh) {
+  if (ok) { S.reviewed[k] = todayISO(); store.set("reviewed", S.reviewed); }
+  if (!K[k] || kKnown(k)) return;
+  const r = applyAnswer(kCard(k), ok, fresh);
+  if (!r) return;
+  const log = dayLog();
+  log[r.what]++;
+  if (r.card.ivl >= MATURE) { r.card.known = true; log.matured++; }
+  S.ov[k] = { ...r.card, t: Math.floor(Date.now() / 1000) };
+  store.set("ov", S.ov); store.set("day", S.day);
+}
+function countWord(w, ok) {
+  if (!W[w] || W[w][4] || (S.wov[w] && S.wov[w].known)) return;
+  const r = applyAnswer(wCard(w), ok, true);
+  if (!r) return;
+  dayLog().words++;
+  if (r.card.ivl >= MATURE) r.card.known = true;
+  S.wov[w] = { ...r.card, t: Math.floor(Date.now() / 1000) };
+  store.set("wov", S.wov); store.set("day", S.day);
+}
+const isDue = k => { const c = kCard(k); return !!c && !kKnown(k) && c.due <= todayISO() && S.reviewed[k] !== todayISO(); };
+const isHard = k => { const c = kCard(k); return !!c && !kKnown(k) && c.lapses >= HARD_LAPSES && S.reviewed[k] !== todayISO(); };
+const kStatus = k => kKnown(k) ? "known" : kCard(k) ? (kCard(k).lapses >= HARD_LAPSES ? "hard" : "learning") : "new";
 const inLevel = k => K[k] && LEVEL_SETS[S.level].includes(K[k][1]);
 function focusKanji() {
-  return Object.keys(SRS).filter(k => inLevel(k) && (isDue(k) || isHard(k)))
-    .sort((a, b) => isHard(b) - isHard(a) || SRS[a][0].localeCompare(SRS[b][0]));
+  return [...new Set(Object.keys(SRS).concat(Object.keys(S.ov)))].filter(k => inLevel(k) && (isDue(k) || isHard(k)))
+    .sort((a, b) => isHard(b) - isHard(a) || kCard(a).due.localeCompare(kCard(b).due));
 }
 const focusing = () => S.focus === "due" && focusKanji().length > 0;
 const famOf = {};
@@ -360,7 +420,7 @@ function focusFamilies(keys, membersOf) {
 }
 function familiarity(f) {
   const ts = F[f].k;
-  return ts.filter(k => K[k][2] !== "new").length / ts.length;
+  return ts.filter(k => kStatus(k) !== "new").length / ts.length;
 }
 // sound families with different sounds, so the reading step never offers two right answers
 function pickSoundFamilies() {
@@ -455,6 +515,7 @@ function renderBar() {
 
 function startRound() {
   if (S.mode === "build") return startBuild();
+  if (S.mode === "new") return startNew();
   if (S.mode === "words") return startWords();
   if (S.mode === "lookalikes") return startLookalikes();
   const { fams, parent } = pickFamilies();
@@ -501,7 +562,7 @@ function answerFamily(f) {
   R.results.push({ fam: ok, mean: null });
   record({ step: isSound() ? "sound_family" : "family", k, status: K[k][2], right, picked: f, ok, hinted: !!R.hinted });
   R.hinted = false;
-  const ask = isSound() || (S.meanings && K[k][2] !== "new");
+  const ask = isSound() || (S.meanings && kStatus(k) !== "new");
   const second = isSound() ? readingStep : meaningStep;
   if (ok) {
     S.streak++; bumpBest();
@@ -557,8 +618,9 @@ function answerMeaning(i) {
   const { k, f } = R.tiles[R.i];
   const right = K[k][0], other = R.opts[i].k, ok = other === k;
   R.results[R.results.length - 1].mean = ok;
-  record({ step: "meaning", k, status: K[k][2], picked: other, ok, options: R.opts.map(o => o.k), due: !!isDue(k) });
-  if (ok && (isDue(k) || isHard(k))) { S.reviewed[k] = todayISO(); store.set("reviewed", S.reviewed); }
+  const fresh = !!R.tiles[R.i].fresh;
+  record({ step: "meaning", k, status: K[k][2], picked: other, ok, options: R.opts.map(o => o.k), due: !!isDue(k), ...(fresh ? { fresh } : {}) });
+  countKanji(k, ok, fresh);
   if (!ok) addMixup(k, other);
   if (ok) {
     S.streak++; bumpBest();
@@ -690,8 +752,70 @@ function pickBuildKanji() {
   const fresh = cands.filter(k => !S.builtKanji.has(k));
   const pool = fresh.length >= 5 ? fresh : cands;
   // mostly kanji you know or are learning (you can build what you've met), a few new ones
-  return shuffle(pool.slice()).sort((a, b) => (K[a][2] === "new") - (K[b][2] === "new") + (Math.random() - .5) * 1.4).slice(0, 5);
+  return shuffle(pool.slice()).sort((a, b) => (kStatus(a) === "new") - (kStatus(b) === "new") + (Math.random() - .5) * 1.4).slice(0, 5);
 }
+// ======================= New kanji: studied, then built from memory a few kanji later; that first test starts it
+// families you already have a foothold in first, at most one new kanji per family a day (as the quiz's --clusters)
+function newCandidates() {
+  const foothold = k => famOf[k] ? F[famOf[k]].k.filter(x => x !== k && kStatus(x) !== "new").length : 0;
+  return Object.keys(K).filter(k => inLevel(k) && kStatus(k) === "new" && (K[k][3] || []).length)
+    .map(k => [S.introDay[famOf[k] || k] === todayISO() ? 1 : 0, -foothold(k), anchorOf(k) && wKnown(anchorOf(k)) ? 0 : 1, Math.random(), k])
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]).map(x => x[4]);
+}
+function pickNewKanji() {
+  const out = [], fams = new Set();
+  for (const k of newCandidates()) {
+    const f = famOf[k] || k;
+    if (fams.has(f)) continue;
+    out.push(k); fams.add(f);
+    if (out.length === 4) break;
+  }
+  return out;
+}
+function startNew() {
+  show("play");
+  const ks = pickNewKanji();
+  if (!ks.length) {
+    S.phase = null;
+    card(`<p class="verdict">Every kanji at this level is started. Pick another level, or review in the other modes.</p>
+      <button class="next" type="button" id="home-btn" data-focus>Back</button>`);
+    $("home-btn").addEventListener("click", goHome);
+    return;
+  }
+  // study 1, 2, 3, then each test comes after the next study: s1 s2 s3 t1 s4 t2 t3 t4
+  const study = ks.map(k => ({ k, f: famOf[k], study: true })), test = ks.map(k => ({ k, f: famOf[k], fresh: true }));
+  const tiles = study.slice(0, 3);
+  test.forEach((t, i) => { tiles.push(t); if (study[i + 3]) tiles.push(study[i + 3]); });
+  S.round = { build: true, isNew: true, fams: [], parent: null, tiles, i: 0, si: 0, results: [], missedFams: new Set(), notice: "" };
+  buildTileStart();
+}
+function newStudy(k) {
+  const R = S.round, w = anchorOf(k), f = soundFamilyOf(k);
+  S.phase = "nstudy";
+  S.introDay[famOf[k] || k] = todayISO(); store.set("introDay", S.introDay);
+  if (w && !W[w][4]) { S.wseen[w] = S.wseen[w] || todayISO(); store.set("wseen", S.wseen); }
+  record({ step: "new_study", k });
+  renderBar();
+  card(`
+    <p class="q">new kanji</p>
+    <div class="glyph">${k}</div>
+    <p class="verdict"><b>${K[k][0]}</b></p>
+    ${partsRow(k, "", "its parts")}
+    ${f ? `<p class="hint">${f} gives the sound: ${SND[f].a[k]}, like ${SND[f].k.filter(x => x !== k).slice(0, 3).join(" ")}</p>` : ""}
+    ${D.mnem && D.mnem[k] ? `<p class="mnem">${D.mnem[k]}</p>` : ""}
+    ${w ? `<p class="q">a word with it</p><p class="verdict"><span class="g">${W[w][0]}</span> ${W[w][1]} · ${W[w][2]}</p>${splitHTML(w, k)}` : ""}
+    <button class="next" type="button" id="cont" data-focus>Got it</button>
+    <p class="sub">you'll build it from memory in a moment</p>`);
+  $("cont").addEventListener("click", continueNewStudy);
+}
+function continueNewStudy() {
+  if (S.phase !== "nstudy") return;
+  S.phase = null;
+  const R = S.round;
+  R.i++;
+  R.i < R.tiles.length ? buildTileStart() : endBuild();
+}
+
 function startBuild() {
   show("play");
   const ks = pickBuildKanji();
@@ -707,6 +831,7 @@ function startBuild() {
 }
 function buildTileStart() {
   const R = S.round, { k } = R.tiles[R.i];
+  if (R.tiles[R.i].study) return newStudy(k);
   R.steps = buildSteps(k); R.si = 0; R.hinted = false;
   R.results.push({ k, parts: null, sound: null, mean: null, reading: null });
   renderBar();
@@ -752,7 +877,7 @@ function partsStep() {
   card(`
     <p class="q">which parts is it made of? <span style="text-transform:none;letter-spacing:0">(pick all of them)</span></p>
     <div class="glyph">${k}</div>
-    <p class="hint">${K[k][2] === "new" ? `new to you: ${K[k][0]}` : ""}</p>
+    <p class="hint">${kStatus(k) === "new" && !R.tiles[R.i].fresh ? `new to you: ${K[k][0]}` : ""}</p>
     <div class="pgrid" role="group" aria-label="Parts">
       ${R.opts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${c}</span><span class="pm">${D.parts[c] || ""}</span></button>`).join("")}
     </div>
@@ -788,7 +913,7 @@ function checkParts() {
     S.phase = "review";
     card(`
       <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> is built from ${mine.map(c => `<span class="g">${c}</span>`).join(" + ")}</p>
-      <div class="compare"><div class="crow right"><span class="cg">${k}</span><span class="cm"><b>its parts</b>${K[k][2] === "new" ? K[k][0] : ""}</span>
+      <div class="compare"><div class="crow right"><span class="cg">${k}</span><span class="cm"><b>its parts</b>${kStatus(k) === "new" && !R.tiles[R.i].fresh ? K[k][0] : ""}</span>
         <span class="parts">${mine.map(c => partChip(k, c, missed.includes(c) ? "missed" : "")).join("")}${extra.map(c => `<span class="part extra"><span class="pg">${c}</span>${D.parts[c] || ""}</span>`).join("")}</span></div></div>
       <p class="sub">${missed.length ? `green: the part${missed.length > 1 ? "s" : ""} you missed` : ""}${missed.length && extra.length ? " · " : ""}${extra.length ? "struck out: not in it" : ""}</p>
       <button class="next" type="button" id="cont" data-focus>Continue</button>`);
@@ -933,6 +1058,7 @@ function answerAnchor(i) {
   R.results[R.results.length - 1].reading = ok;
   record({ step: "build_anchor", k, w, right: W[w][1], picked: o.r, ok });
   record({ step: "word", w, ok, read_ok: ok, mean_ok: null, picked_r: o.r, anchor: true, known: !!W[w][4] });
+  countWord(w, ok);
   if (ok) {
     S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
@@ -954,7 +1080,7 @@ function endBuild() {
   const R = S.round;
   const full = R.results.filter(r => ["parts", "sound", "mean", "reading"].every(x => r[x] !== false));
   store.set("builtKanji", [...S.builtKanji]);
-  record({ step: "round", built: full.map(r => r.k), kanji: R.tiles.map(t => t.k) });
+  record({ step: "round", built: full.map(r => r.k), kanji: R.tiles.filter(t => !t.study).map(t => t.k), ...(R.isNew ? { new: true } : {}) });
   flushResults();
   const mark = v => v === null ? "" : v ? "✓" : "✗";
   S.phase = "summary";
@@ -976,22 +1102,25 @@ function endBuild() {
 }
 
 // ======================= words: readings learned in context
-const W = D.words || {}, KUN = D.kun || {}, VS = D.vsrs || {};
+const W = D.words || {}, KUN = D.kun || {};
 const HAS_WORDS = Object.keys(W).length > 0;
 const wKanji = w => W[w][5].filter(u => K[u[0]]).map(u => u[0]);
 const wInLevel = w => LEVEL_SETS[S.level].includes(W[w][3]);
-const wStarted = w => VS[w] || S.wseen[w];
-const wDue = w => S.wrev[w] !== todayISO() && (VS[w] ? VS[w][0] <= todayISO() : !!S.wseen[w] && S.wseen[w] < todayISO());
-const wHard = w => VS[w] && VS[w][1] >= 3 && S.wrev[w] !== todayISO();
+const wKnown = w => W[w][4] || !!(S.wov[w] && S.wov[w].known);
+const wStarted = w => wCard(w) || S.wseen[w];
+// a word only seen (an anchor shown in Build) is due the next day
+const wDue = w => !wKnown(w) && (wCard(w) ? wCard(w).due <= todayISO() : !!S.wseen[w] && S.wseen[w] < todayISO());
+const wHard = w => !wKnown(w) && !!wCard(w) && wCard(w).lapses >= HARD_LAPSES && wCard(w).due <= todayISO();
+const wDueOn = w => wCard(w) ? wCard(w).due : S.wseen[w];
 function dueWords() {
-  return Object.keys(W).filter(w => !W[w][4] && wInLevel(w) && (wDue(w) || wHard(w)))
-    .sort((a, b) => wHard(b) - wHard(a) || ((VS[a] || [S.wseen[a]])[0] || "").localeCompare((VS[b] || [S.wseen[b]])[0] || ""));
+  return Object.keys(W).filter(w => wInLevel(w) && wDue(w))
+    .sort((a, b) => wHard(b) - wHard(a) || wDueOn(a).localeCompare(wDueOn(b)));
 }
 // new words, cheapest first (as the quiz's --vocab): every kanji known, then one still being learned
 function newWords() {
   const tier = w => {
-    const open = wKanji(w).filter(k => K[k][2] !== "known");
-    return !open.length ? 0 : open.length === 1 && K[open[0]][2] !== "new" ? 1 : 2;
+    const open = wKanji(w).filter(k => kStatus(k) !== "known");
+    return !open.length ? 0 : open.length === 1 && kStatus(open[0]) !== "new" ? 1 : 2;
   };
   return Object.keys(W).filter(w => !W[w][4] && !wStarted(w) && wInLevel(w) && wKanji(w).length)
     .map(w => [tier(w), LV.indexOf(W[w][3]), W[w][0].length, w]).filter(x => x[0] < 2)
@@ -1002,7 +1131,7 @@ function focusWords() {
   const out = [], fk = focusKanji();
   for (const k of fk) {
     const w = Object.keys(W).find(w => !W[w][4] && !wStarted(w) && !out.includes(w) && W[w][0].includes(k) &&
-      wKanji(w).every(x => x === k || K[x][2] !== "new"));
+      wKanji(w).every(x => x === k || kStatus(x) !== "new"));
     if (w) out.push(w);
     if (out.length >= 2) break;
   }
@@ -1110,7 +1239,7 @@ function wordMeaningOptions(w) {
   return shuffle([{ g: right, w }, ...picked]);
 }
 // a word's meaning is typed once you've got it right twice running; a miss brings the choices back
-const wScore = w => typeof S.wstreak[w] === "number" ? S.wstreak[w] : (VS[w] ? VS[w][2] || 0 : 0);
+const wScore = w => typeof S.wstreak[w] === "number" ? S.wstreak[w] : (wCard(w) ? wCard(w).reps : 0);
 const wTyped = w => wScore(w) >= 2;
 function wBump(w, ok) {
   S.wstreak[w] = ok ? wScore(w) + 1 : 0;
@@ -1259,8 +1388,8 @@ function finishWord() {
   record({ step: "word", w, ok, read_ok: R.cur.read, mean_ok: R.cur.mean, picked_r: R.cur.pickedR, picked_m: R.cur.pickedM,
            typed_m: !!R.cur.typedM, fresh: !!t.fresh, known: !!W[w][4] });
   R.results.push({ ...R.cur, retry: !!t.retry });
-  if (ok) { S.wrev[w] = todayISO(); store.set("wrev", S.wrev); }
-  else t.missed = true;
+  countWord(w, ok);
+  if (!ok) t.missed = true;
   wordAdvance();
 }
 
@@ -1312,7 +1441,7 @@ function lookLinks(k) {
   return [...new Set((LOOKS[k] || []).concat(S.mixups[k] || []))].filter(x => K[x] && x !== k);
 }
 function lookGroups() {
-  const rank = k => ({ hard: 0, learning: 1, new: 2, known: 3 })[K[k][2]];
+  const rank = k => ({ hard: 0, learning: 1, new: 2, known: 3 })[kStatus(k)];
   const fk = new Set(S.focus === "due" ? focusKanji() : []);
   const anchors = Object.keys(K).filter(k => inLevel(k) && lookLinks(k).length)
     .map(k => [lookLinks(k).concat(k).some(x => fk.has(x)) ? 0 : 1, rank(k), Math.random(), k])
@@ -1362,7 +1491,7 @@ function groupHTML(g, mark) {
   const shared = (K[g[0]][3] || []).filter(c => g.every(x => (K[x][3] || []).includes(c)));
   return `<div class="compare">${g.map(x => `<div class="crow ${x === mark ? "right" : ""}">
     <span class="cg">${x}</span>
-    <span class="cm"><b>${x === mark ? "this one" : K[x][2]}</b>${K[x][0]}</span>
+    <span class="cm"><b>${x === mark ? "this one" : kStatus(x)}</b>${K[x][0]}</span>
     <span class="parts">${(K[x][3] || []).map(c => partChip(x, c, shared.includes(c) ? "same" : "diff")).join("")}</span>
     ${D.mnem && D.mnem[x] ? `<span class="mn">${D.mnem[x]}</span>` : ""}
   </div>`).join("")}</div>`;
@@ -1404,7 +1533,7 @@ function checkLook() {
   R.results.push(res);
   const done = () => {
     record({ step: "meaning", k, status: K[k][2], picked: other || null, guess, typed: true, ok: res.ok, due: !!isDue(k) });
-    if (res.ok && (isDue(k) || isHard(k))) { S.reviewed[k] = todayISO(); store.set("reviewed", S.reviewed); }
+    countKanji(k, res.ok, false);
     if (!res.ok) t.missed = true;
     lookAdvance();
   };
@@ -1618,32 +1747,64 @@ function goHome() {
   $("start").focus();
 }
 
+// the progress tables, live: [total, known, learning, close, hard] per level, with today's change beside each number
+function tally(items, level, card, known) {
+  const rows = {};
+  for (const x of items) {
+    const r = rows[level(x)] = rows[level(x)] || [0, 0, 0, 0, 0], c = card(x);
+    r[0]++;
+    if (known(x)) r[1]++;
+    else if (c) { r[2]++; r[3] += c.ivl >= 14; r[4] += c.lapses >= HARD_LAPSES; }
+  }
+  return rows;
+}
+function progressTable(label, live, base, extra) {
+  const lv = LEVEL_SETS[S.level];
+  const cell = (n, b) => `${n}${n !== b ? `<span class="delta${n < b ? " down" : ""}">${n > b ? "+" : ""}${n - b}</span>` : ""}`;
+  const levels = Object.keys(live).filter(l => LV.includes(l)).sort((a, b) => LV.indexOf(a) - LV.indexOf(b));
+  return `<tr><th>${label}</th><th>known</th><th></th><th>learning</th><th>close</th><th>hard</th><th>new</th></tr>` +
+    levels.map(l => {
+      const [t, kn, st, close, hard] = live[l], b = base[l];
+      return `<tr class="${lv.includes(l) ? "" : "dim"}"><td>${l.toUpperCase()}</td><td>${cell(kn, b[1])}/${t}</td><td class="pc">${Math.floor(100 * kn / t)}%</td>` +
+        `<td>${cell(st, b[2])}</td><td>${cell(close, b[3])}</td><td>${cell(hard, b[4])}</td><td>${cell(t - kn - st, b[0] - b[1] - b[2])}</td></tr>`;
+    }).join("") + (extra || "");
+}
+function renderProgress() {
+  const ks = Object.keys(K);
+  const live = tally(ks, k => K[k][1], kCard, kKnown);
+  const base = tally(ks, k => K[k][1], k => fromSync(SRS[k]), k => K[k][2] === "known");
+  const un = (D.progress || []).find(r => r[0] === "unlisted");
+  $("prog").innerHTML = progressTable("kanji", live, base, un ?
+    `<tr class="dim"><td>unlisted</td><td>${un[2]}/${un[1]}</td><td class="pc">${Math.floor(100 * un[2] / un[1])}%</td><td>${un[3]}</td><td>${un[4]}</td><td>${un[5]}</td><td>${un[1] - un[2] - un[3]}</td></tr>` : "");
+  const ws = Object.keys(W);
+  $("vprog").innerHTML = ws.length ? progressTable("words", tally(ws, w => W[w][3], wCard, wKnown),
+    tally(ws, w => W[w][3], w => fromSync(VS[w]), w => W[w][4])) : "";
+  const d = dayLog(), pending = Object.keys(S.ov).length + Object.keys(S.wov).length;
+  const parts = [d.reviews && `${d.reviews} due reviews`, d.started && `${d.started} kanji started`, d.misses && `${d.misses} misses`,
+                 d.matured && `${d.matured} matured to known`, d.words && `${d.words} word answers`].filter(Boolean);
+  $("prog-note").innerHTML = (parts.length ? `<b>Today:</b> ${parts.join(" · ")}. ` : "") +
+    `Only a due kanji answered right moves forward; answering it again the same day doesn't. Known = next review 21+ days out, close = 14+. ` +
+    (pending ? `The +/− are your game answers since ${D.generated}; they reach your vault when Claude syncs.` : `As of ${D.generated}.`);
+}
 function renderHome() {
   $("s-built").textContent = `${S.built.size} / ${Object.keys(F).length}`;
   $("s-best").textContent = S.best;
   $("s-snd").textContent = `${S.builtSound.size} / ${Object.keys(SND).length}`;
   $("s-snd-box").hidden = !HAS_SOUND;
   $("s-kanji").textContent = S.builtKanji.size;
-  const lv = LEVEL_SETS[S.level];
-  $("prog").innerHTML = (D.progress || []).length ? `<tr><th>level</th><th>known</th><th></th><th>learning</th><th>close</th><th>hard</th><th>new</th></tr>` +
-    D.progress.map(([l, t, kn, st, close, hard]) =>
-      `<tr class="${lv.includes(l) ? "" : "dim"}"><td>${l === "unlisted" ? "unlisted" : l.toUpperCase()}</td><td>${kn}/${t}</td><td class="pc">${Math.floor(100 * kn / t)}%</td>` +
-      `<td>${st}</td><td>${close}</td><td>${hard}</td><td>${t - kn - st}</td></tr>`).join("") : "";
-  $("prog-note").textContent = (D.progress || []).length
-    ? `Your quiz progress as of ${D.generated}. Close: next review 14+ days out. Hard: missed 3+ times.` : "";
-  $("vprog").innerHTML = (D.vprogress || []).length ? `<tr><th>words</th><th>known</th><th></th><th>learning</th><th>close</th><th>hard</th><th>new</th></tr>` +
-    D.vprogress.map(([l, t, kn, st, close, hard]) =>
-      `<tr class="${lv.includes(l) ? "" : "dim"}"><td>${l.toUpperCase()}</td><td>${kn}/${t}</td><td class="pc">${Math.floor(100 * kn / t)}%</td>` +
-      `<td>${st}</td><td>${close}</td><td>${hard}</td><td>${t - kn - st}</td></tr>`).join("") : "";
+  renderProgress();
   const fk = focusKanji();
-  if (S.mode === "lookalikes") {
+  if (S.mode === "new") {
+    const n = newCandidates().length;
+    $("due-note").textContent = `${n} kanji not started at ${S.level.toUpperCase()}. Each is studied, then built from memory: that first test starts its schedule. Families you already know kanji in come first.`;
+  } else if (S.mode === "lookalikes") {
     const n = Object.keys(K).filter(k => inLevel(k) && lookLinks(k).length).length;
     $("due-note").textContent = `${n} kanji at ${S.level.toUpperCase()} with lookalikes, from your misses` +
       (Object.keys(S.mixups).length ? ` (${Object.keys(S.mixups).length} added here since the last sync)` : "") + `. Due & hard puts groups with due kanji first.`;
   } else if (S.mode === "words") {
-    const dw = dueWords(), started = Object.keys(S.wseen).filter(w => !VS[w]).length;
+    const dw = dueWords(), started = Object.keys(S.wov).length;
     $("due-note").textContent = `${dw.length} words due at ${S.level.toUpperCase()}` +
-      (started ? `; ${started} started here since the last sync` : "") + `. New words come from kanji you know or are learning.`;
+      (started ? `; ${started} answered here since the last sync` : "") + `. New words come from kanji you know or are learning.`;
   } else
   $("due-note").textContent = Object.keys(SRS).length
     ? `${fk.length} due or hard at ${S.level.toUpperCase()} (${fk.filter(isHard).length} hard), from your quiz schedule as of ${D.generated}`
@@ -1665,7 +1826,7 @@ function chipGroup(id, options, current, onPick) {
 
 chipGroup("g-level", Object.keys(LEVEL_SETS).map(l => [l, l.toUpperCase()]), S.level, v => { S.level = v; store.set("level", v); renderHome(); });
 chipGroup("g-focus", [["due", "Due & hard"], ["all", "Everything"]], S.focus, v => { S.focus = v; store.set("focus", v); renderHome(); });
-chipGroup("g-mode", [["families", "Families"], ["cousins", "Cousins (harder)"]].concat(HAS_SOUND ? [["sounds", "Sounds (readings)"]] : [], [["build", "Build (whole kanji)"]], HAS_WORDS ? [["words", "Words (readings)"]] : [], [["lookalikes", "Lookalikes"]]),
+chipGroup("g-mode", [["new", "New kanji"], ["families", "Families"], ["cousins", "Cousins (harder)"]].concat(HAS_SOUND ? [["sounds", "Sounds (readings)"]] : [], [["build", "Build (whole kanji)"]], HAS_WORDS ? [["words", "Words (readings)"]] : [], [["lookalikes", "Lookalikes"]]),
   S.mode, v => { S.mode = v; store.set("mode", v); renderHome(); });
 chipGroup("g-mean", [["true", "On"], ["false", "Off"]], S.meanings, v => { S.meanings = v === "true"; store.set("meanings", S.meanings); });
 $("start").addEventListener("click", startRound);
@@ -1674,6 +1835,7 @@ $("quit").addEventListener("click", goHome);
 document.addEventListener("keydown", e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (S.phase === "wtype" || S.phase === "ltype") { if (e.key === "Escape") goHome(); return; }
+  if (S.phase === "nstudy" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueNewStudy(); return; }
   if (S.phase === "lcompare" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); lookAdvance(); return; }
   if (S.phase === "lrev" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerLookRev(+e.key - 1); return; }
   if (S.phase === "review" && e.key === "r" && S.overrule) { e.preventDefault(); S.overrule(); return; }
@@ -1700,7 +1862,7 @@ document.addEventListener("keydown", e => {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerReading(+e.key - 1); }
   } else if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev"].includes(S.phase)) {
+  } else if (["family", "meaning", "reading", "parts", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });

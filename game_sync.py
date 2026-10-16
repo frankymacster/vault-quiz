@@ -11,8 +11,9 @@ to the vault's .quiz_state.json with the quiz's own rules:
     day -- picking from four is weaker evidence than typed recall, and
     answering before it's due doesn't lengthen how long it lasts;
   - kanji you haven't started aren't added (the game shows their meaning
-    first, so a right answer isn't recall); kanji tagged known that you
-    miss are reported, not un-tagged.
+    first, so a right answer isn't recall), except in New kanji mode,
+    where a kanji is studied and then tested: that test starts it, as in
+    the quiz; kanji tagged known that you miss are reported, not un-tagged.
 
 Words mode answers go to the vocabulary schedule (.vocab_state.json, the
 quiz's --vocab mode): a word is right when both its reading and its meaning
@@ -53,7 +54,7 @@ new.sort(key=lambda p: p[0].get("t", 0))
 
 real_today = q.today
 lapses, reviews, early, unstarted, known_missed, matured = [], [], 0, 0, [], []
-new_looks = []
+new_looks, started = [], []
 w_started, w_lapses, w_reviews, w_early, w_matured, w_known_missed = [], [], [], 0, [], []
 for e, sid in new:
     if e.get("step") == "word" and e.get("w") in vocab:
@@ -97,11 +98,16 @@ for e, sid in new:
             known_missed.append(k)
         continue
     card = state.get(k)
-    if card is None:
-        unstarted += 1
-        continue
     day = datetime.date.fromtimestamp(e["t"]).toordinal()
     q.today = lambda d=day: d                  # schedule from the day it was answered
+    if card is None:
+        # New kanji mode: studied first, so its first test starts it, as in the quiz
+        if e.get("fresh"):
+            state[k] = q.schedule({"intro": day}, 3 if ok else 1)
+            started.append(k)
+        else:
+            unstarted += 1
+        continue
     if not ok:
         q.schedule(card, 1)
         lapses.append(k)
@@ -131,3 +137,5 @@ if any((w_started, w_lapses, w_reviews, w_early, w_known_missed)):
           + (f"; known words missed: {' '.join(dict.fromkeys(w_known_missed))}" if w_known_missed else ""))
 if new_looks:
     print(f"lookalikes added from your mix-ups: {' '.join(dict.fromkeys(new_looks))}")
+if started:
+    print(f"new kanji started: {''.join(started)}")
