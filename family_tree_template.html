@@ -1,0 +1,312 @@
+<title>Kanji Family Tree</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one column of family "trunks"; each family is a head glyph with its members as tiles,
+   sub-families hang below on a guide line. Indigo ink on cool paper; status is the only loud colour. */
+:root {
+  --paper: #f3f5f8;
+  --sheet: #ffffff;
+  --ink: #1b2233;
+  --muted: #5d6679;
+  --line: #d9dee7;
+  --indigo: #2c4a8c;
+  --known: #2f7d5c;
+  --known-bg: #e3f1ea;
+  --learning: #b07a10;
+  --learning-bg: #fbf0d7;
+  --hard: #b8382c;
+  --hard-bg: #f8e1de;
+  --new-bg: #ffffff;
+  --glyph: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif;
+  --ui: "IBM Plex Sans", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #11151d; --sheet: #181d27; --ink: #e5e8ef; --muted: #98a1b3; --line: #2b3242;
+    --indigo: #8fa8e6; --known: #6cc79e; --known-bg: #173126; --learning: #e2b04a; --learning-bg: #33280f;
+    --hard: #ee7c70; --hard-bg: #3a1c19; --new-bg: #181d27; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #11151d; --sheet: #181d27; --ink: #e5e8ef; --muted: #98a1b3; --line: #2b3242;
+  --indigo: #8fa8e6; --known: #6cc79e; --known-bg: #173126; --learning: #e2b04a; --learning-bg: #33280f;
+  --hard: #ee7c70; --hard-bg: #3a1c19; --new-bg: #181d27; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--paper); color: var(--ink); font-family: var(--ui); font-size: 15px; line-height: 1.45; }
+.wrap { max-width: 1080px; margin: 0 auto; padding-inline: 16px; padding-block: 24px 64px; }
+
+header.top { display: grid; gap: 14px; }
+h1 { font-family: var(--glyph); font-weight: 700; font-size: 1.9rem; margin: 0; letter-spacing: .01em; text-wrap: balance; }
+h1 .jp { color: var(--indigo); margin-right: .35em; }
+.lede { margin: 0; color: var(--muted); max-width: 66ch; }
+
+.stats { display: flex; flex-wrap: wrap; gap: 8px 22px; font-variant-numeric: tabular-nums; }
+.stat b { font-family: var(--mono); font-weight: 500; font-size: 1.15rem; }
+.stat span { color: var(--muted); font-size: .85rem; margin-left: 4px; }
+.bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--line); }
+.bar i { display: block; height: 100%; }
+.bar .k { background: var(--known); } .bar .l { background: var(--learning); } .bar .h { background: var(--hard); }
+
+.controls { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--paper);
+  display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding-block: 12px; border-bottom: 1px solid var(--line); margin-top: 6px; }
+.controls input[type=search] { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--sheet); color: var(--ink); width: min(240px, 100%); }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip, .btn { font: inherit; font-size: .82rem; letter-spacing: .04em; text-transform: uppercase; border: 1px solid var(--line);
+  background: var(--sheet); color: var(--muted); padding: 5px 9px; border-radius: 6px; cursor: pointer; }
+.chip[aria-pressed=true] { background: var(--indigo); border-color: var(--indigo); color: var(--sheet); }
+.btn:hover, .chip:hover { border-color: var(--indigo); }
+:is(.chip, .btn, input, .fam-head):focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+label.toggle { display: inline-flex; gap: 6px; align-items: center; font-size: .88rem; color: var(--muted); cursor: pointer; }
+select { font: inherit; font-size: .88rem; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--sheet); color: var(--ink); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: .82rem; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1.5px solid var(--line); }
+.legend .k::before { background: var(--known-bg); border-color: var(--known); }
+.legend .l::before { background: var(--learning-bg); border-color: var(--learning); }
+.legend .h::before { background: var(--hard-bg); border-color: var(--hard); }
+.legend .n::before { background: var(--new-bg); }
+
+main { display: grid; gap: 14px; margin-top: 18px; }
+.root { background: var(--sheet); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+.fam { min-width: 0; }
+.fam-head { display: flex; align-items: center; gap: 12px; width: 100%; background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.seal { font-family: var(--glyph); font-weight: 700; font-size: 1.6rem; line-height: 1; width: 44px; height: 44px; flex: none;
+  display: grid; place-items: center; border: 1.5px solid var(--indigo); color: var(--indigo); border-radius: 8px; }
+.sub > .fam-head .seal { width: 34px; height: 34px; font-size: 1.25rem; }
+.fam-title { min-width: 0; flex: 1; display: grid; gap: 5px; }
+.fam-title .meaning { font-weight: 600; }
+.fam-title .meaning em { font-style: normal; color: var(--muted); font-weight: 400; }
+.fam-title .count { font-family: var(--mono); font-size: .78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fam-title .bar { max-width: 260px; height: 6px; }
+.caret { color: var(--muted); font-size: .8rem; transition: transform .15s; flex: none; }
+.fam[open] > .fam-head .caret { transform: rotate(90deg); }
+.fam-body { display: none; padding-top: 12px; padding-left: 21px; margin-left: 21px; border-left: 1.5px solid var(--line); gap: 12px; }
+.sub .fam-body { margin-left: 16px; padding-left: 16px; }
+.fam[open] > .fam-body { display: grid; }
+
+.tiles { display: flex; flex-wrap: wrap; gap: 6px; }
+.tile { width: 64px; min-height: 66px; padding: 6px 3px 5px; border-radius: 7px; border: 1.5px solid var(--line); background: var(--new-bg);
+  display: grid; justify-items: center; align-content: start; gap: 2px; position: relative; }
+.tile .g { font-family: var(--glyph); font-weight: 500; font-size: 1.65rem; line-height: 1.05; }
+.tile .s { font-size: .64rem; color: var(--muted); max-width: 58px; text-align: center; line-height: 1.15;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tile .lv { position: absolute; top: 3px; right: 4px; font-family: var(--mono); font-size: .56rem; color: var(--muted); }
+.tile.known { background: var(--known-bg); border-color: var(--known); }
+.tile.learning { background: var(--learning-bg); border-color: var(--learning); }
+.tile.hard { background: var(--hard-bg); border-color: var(--hard); }
+.tile.dim { opacity: .28; }
+.tile.hit { box-shadow: 0 0 0 3px var(--indigo); }
+.tile.head::after { content: ""; position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%); width: 18px; height: 2px; background: var(--indigo); border-radius: 2px; }
+
+.empty { color: var(--muted); padding: 24px 0; }
+.foot { margin-top: 28px; color: var(--muted); font-size: .82rem; max-width: 70ch; }
+@media (max-width: 520px) {
+  h1 { font-size: 1.5rem; }
+  .fam-body { margin-left: 10px; padding-left: 10px; }
+  .sub .fam-body { margin-left: 8px; padding-left: 8px; }
+  .tile { width: 56px; }
+  .tile .g { font-size: 1.45rem; }
+}
+@media (prefers-reduced-motion: reduce) { .caret { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <h1><span class="jp">漢字</span>Kanji Family Tree</h1>
+    <p class="lede">Every JLPT kanji sits in one family, named by its most distinctive shared part. Families nest: a family's head is itself built from a bigger family's part. Open a family to see its kanji and the families that hang under it.</p>
+    <div class="stats" id="stats"></div>
+    <div class="bar" id="overall" aria-hidden="true"></div>
+    <div class="legend"><span class="k">known</span><span class="l">learning</span><span class="h">hard (missed 3+ times)</span><span class="n">not started</span></div>
+  </header>
+
+  <div class="controls" role="toolbar" aria-label="Filters">
+    <input type="search" id="q" placeholder="Find a kanji or meaning" aria-label="Find a kanji or meaning">
+    <div class="chips" id="levels" aria-label="JLPT levels"></div>
+    <label class="toggle"><input type="checkbox" id="unfinished"> unfinished families only</label>
+    <select id="sort" aria-label="Sort families">
+      <option value="size">largest first</option>
+      <option value="close">closest to done</option>
+      <option value="todo">most left to learn</option>
+    </select>
+    <button class="btn" id="expand" type="button">expand all</button>
+    <button class="btn" id="collapse" type="button">collapse all</button>
+  </div>
+
+  <main id="tree"></main>
+  <p class="foot" id="foot"></p>
+</div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById("data").textContent);
+const F = D.families, K = D.kanji;
+const LV = D.levels;
+const STATUS_ORDER = { known: 0, learning: 1, hard: 2, new: 3 };
+
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("kft:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("kft:" + k, JSON.stringify(v)); } catch {} },
+};
+const state = {
+  q: "",
+  levels: new Set(store.get("levels", LV)),
+  unfinished: store.get("unfinished", false),
+  sort: store.get("sort", "size"),
+  open: new Set(store.get("open", [])),
+};
+
+const allKanji = fam => F[fam].k.concat(...F[fam].c.map(allKanji));
+const subtree = {};
+for (const f of Object.keys(F)) subtree[f] = allKanji(f);
+const tally = ks => {
+  const t = { known: 0, learning: 0, hard: 0, new: 0 };
+  ks.forEach(k => t[K[k][2]]++);
+  return t;
+};
+
+function barHTML(t, n) {
+  const pct = x => (100 * x / Math.max(n, 1)).toFixed(2) + "%";
+  return `<i class="k" style="width:${pct(t.known)}"></i><i class="l" style="width:${pct(t.learning)}"></i><i class="h" style="width:${pct(t.hard)}"></i>`;
+}
+
+function matchesQuery(k) {
+  if (!state.q) return false;
+  const q = state.q.toLowerCase();
+  return k === state.q || K[k][0].toLowerCase().includes(q);
+}
+const inLevels = k => state.levels.has(K[k][1]);
+
+function famVisible(f) {
+  const ks = subtree[f];
+  if (!ks.some(inLevels)) return false;
+  if (state.unfinished && ks.filter(inLevels).every(k => K[k][2] === "known")) return false;
+  if (state.q && !ks.some(matchesQuery)) return false;
+  return true;
+}
+
+function tile(k, isHead) {
+  const [gloss, lv, st] = K[k];
+  const cls = ["tile", st];
+  if (!inLevels(k)) cls.push("dim");
+  if (matchesQuery(k)) cls.push("hit");
+  if (isHead) cls.push("head");
+  const label = `${k}: ${gloss}, ${lv.toUpperCase()}, ${st === "new" ? "not started" : st}`;
+  return `<div class="${cls.join(" ")}" title="${label}" aria-label="${label}"><span class="lv">${lv.slice(1)}</span><span class="g">${k}</span><span class="s">${gloss}</span></div>`;
+}
+
+function sortFams(list) {
+  const key = {
+    size: f => -subtree[f].length,
+    close: f => { const t = tally(subtree[f]); const left = subtree[f].length - t.known; return left === 0 ? 1e6 : left * 1000 - t.known; },
+    todo: f => { const t = tally(subtree[f]); return -(subtree[f].length - t.known); },
+  }[state.sort];
+  return list.slice().sort((a, b) => key(a) - key(b) || a.localeCompare(b));
+}
+
+function famHTML(f, depth) {
+  if (!famVisible(f)) return "";
+  const ks = subtree[f], t = tally(ks);
+  const open = state.q ? true : state.open.has(f) || (depth === 0 && false);
+  const members = F[f].k.slice().sort((a, b) => (a === f ? -1 : b === f ? 1 : 0) || LV.indexOf(K[a][1]) - LV.indexOf(K[b][1]));
+  const kids = sortFams(F[f].c).map(c => famHTML(c, depth + 1)).join("");
+  const nSub = F[f].c.length;
+  const meaning = F[f].m ? F[f].m : "<em>part with no common name</em>";
+  return `<div class="fam ${depth ? "sub" : ""}" data-f="${f}" ${open ? "open" : ""}>
+    <button class="fam-head" type="button" aria-expanded="${open}">
+      <span class="caret" aria-hidden="true">▶</span>
+      <span class="seal">${f}</span>
+      <span class="fam-title">
+        <span class="meaning">${meaning}</span>
+        <span class="count">${ks.length} kanji · ${t.known} known · ${t.learning + t.hard} learning · ${t.new} not started${nSub ? ` · ${nSub} sub-famil${nSub > 1 ? "ies" : "y"}` : ""}</span>
+        <span class="bar" aria-hidden="true">${barHTML(t, ks.length)}</span>
+      </span>
+    </button>
+    <div class="fam-body">
+      <div class="tiles">${members.map(k => tile(k, k === f)).join("")}</div>
+      ${kids}
+    </div>
+  </div>`;
+}
+
+function render() {
+  const roots = sortFams(D.roots).map(f => {
+    const h = famHTML(f, 0);
+    return h ? `<section class="root">${h}</section>` : "";
+  }).filter(Boolean);
+  const loners = D.loners.filter(k => inLevels(k) && (!state.unfinished || K[k][2] !== "known") && (!state.q || matchesQuery(k)));
+  if (loners.length) {
+    roots.push(`<section class="root"><div class="fam" open>
+      <div class="fam-head" style="cursor:default"><span class="seal">独</span>
+      <span class="fam-title"><span class="meaning">On their own</span><span class="count">${loners.length} kanji that share no part with another JLPT kanji</span></span></div>
+      <div class="fam-body" style="display:grid"><div class="tiles">${loners.map(k => tile(k, false)).join("")}</div></div></div></section>`);
+  }
+  document.getElementById("tree").innerHTML = roots.length ? roots.join("") : `<p class="empty">No family matches these filters.</p>`;
+}
+
+function renderStats() {
+  const ks = Object.keys(K), t = tally(ks), n = ks.length;
+  const famsDone = Object.keys(F).filter(f => F[f].k.every(k => K[k][2] === "known")).length;
+  const oneLeft = Object.keys(F).filter(f => F[f].k.filter(k => K[k][2] !== "known").length === 1).length;
+  document.getElementById("stats").innerHTML = [
+    [t.known + " / " + n, "kanji known"],
+    [Object.keys(F).length, "families"],
+    [D.roots.length, "top-level"],
+    [famsDone, "families complete"],
+    [oneLeft, "families one kanji from complete"],
+  ].map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
+  document.getElementById("overall").innerHTML = barHTML(t, n);
+  document.getElementById("foot").textContent =
+    `Snapshot of your Japanese vault on ${D.generated}. Families come from each kanji's parts as recorded in the vault; a kanji with several parts joins the family of its rarest one, so 説 sits with 税 脱 鋭 under 兑 rather than with the 51 kanji built on 言.`;
+}
+
+function bindControls() {
+  const lv = document.getElementById("levels");
+  lv.innerHTML = LV.map(l => `<button class="chip" type="button" data-l="${l}" aria-pressed="${state.levels.has(l)}">${l}</button>`).join("");
+  lv.addEventListener("click", e => {
+    const b = e.target.closest(".chip"); if (!b) return;
+    const l = b.dataset.l;
+    state.levels.has(l) ? state.levels.delete(l) : state.levels.add(l);
+    if (!state.levels.size) state.levels.add(l);
+    lv.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", state.levels.has(c.dataset.l)));
+    store.set("levels", [...state.levels]); render();
+  });
+  const un = document.getElementById("unfinished");
+  un.checked = state.unfinished;
+  un.addEventListener("change", () => { state.unfinished = un.checked; store.set("unfinished", un.checked); render(); });
+  const so = document.getElementById("sort");
+  so.value = state.sort;
+  so.addEventListener("change", () => { state.sort = so.value; store.set("sort", so.value); render(); });
+  let timer;
+  document.getElementById("q").addEventListener("input", e => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { state.q = e.target.value.trim(); render(); }, 120);
+  });
+  document.getElementById("expand").addEventListener("click", () => {
+    Object.keys(F).forEach(f => state.open.add(f)); store.set("open", [...state.open]); render();
+  });
+  document.getElementById("collapse").addEventListener("click", () => {
+    state.open.clear(); store.set("open", []); render();
+  });
+  document.getElementById("tree").addEventListener("click", e => {
+    const h = e.target.closest("button.fam-head"); if (!h) return;
+    const fam = h.parentElement, f = fam.dataset.f;
+    const open = !fam.hasAttribute("open");
+    fam.toggleAttribute("open", open);
+    h.setAttribute("aria-expanded", open);
+    open ? state.open.add(f) : state.open.delete(f);
+    store.set("open", [...state.open]);
+  });
+}
+
+if (!store.get("seeded", false)) {
+  sortFams(D.roots).slice(0, 3).forEach(f => state.open.add(f));
+}
+renderStats();
+bindControls();
+render();
+</script>

@@ -30,6 +30,7 @@ catches those.
     python3 quiz.py --vault <vault> --lookalikes [N]   # drill N lookalike groups
     python3 quiz.py --vault <vault> --hard [N]         # re-study the N most-missed cards
     python3 quiz.py --vault <vault> --level n5-n4      # any mode, limited to these levels
+    python3 quiz.py --vault <vault> --clusters         # new cards family by family
 
 Each vault has a launcher (quiz_kanji.py / quiz_hanzi.py) that fills in --vault.
 """
@@ -47,10 +48,12 @@ import unicodedata
 PROFILES = {
     "Kanji": dict(prefix="Kanji-", noun="kanji", reading="Reading (Kana)",
                   level_re=r"jlpt/(n\d|unlisted)", level_fmt="{}",
-                  levels=["n5", "n4", "n3", "n2", "n1", "unlisted"]),
+                  levels=["n5", "n4", "n3", "n2", "n1", "unlisted"],
+                  family_levels=["n5", "n4", "n3", "n2", "n1"]),
     "Characters": dict(prefix="Hanzi-", noun="hanzi", reading="Pinyin",
                        level_re=r"hsk/(\d)", level_fmt="hsk{}",
-                       levels=["1", "2", "3", "4", "5", "6"]),
+                       levels=["1", "2", "3", "4", "5", "6"],
+                       family_levels=["1", "2", "3", "4", "5", "6"]),
 }
 
 VAULT = STATE = FOLDER = None
@@ -435,6 +438,82 @@ def rank_clusters(clusters, kanji):
     return scored
 
 
+def build_families(kanji):
+    """Each character joins exactly one family: the one named by its rarest
+    shared part (the part that sets it apart), or its own if other
+    characters are built on it. Same rule as the Kanji Family Tree page.
+    Returns (families: head -> members, home: character -> head or None)."""
+    pool = {k for k, d in kanji.items() if level(d["text"]) in P["family_levels"]}
+    uses = collections.defaultdict(set)
+    for k in pool:
+        for c in kanji[k]["comps"]:
+            if c != k:
+                uses[c].add(k)
+    clusters = {c: m | ({c} & pool) for c, m in uses.items() if len(m | ({c} & pool)) >= 2}
+    home = {}
+    for k in pool:
+        cand = [c for c in kanji[k]["comps"] if c in clusters] + ([k] if k in clusters else [])
+        home[k] = min(cand, key=lambda c: (len(clusters[c]), c)) if cand else None
+    fams = collections.defaultdict(list)
+    for k, c in home.items():
+        if c:
+            fams[c].append(k)
+    fams = {c: sorted(m) for c, m in fams.items() if len(m) >= 2}
+    return fams, {k: (c if c in fams else None) for k, c in home.items()}
+
+
+def cluster_order(kanji, state, families, home, levels=None):
+    """New characters, family by family, cheapest first:
+      0. families you already know a member of -- fewest left first, so
+         each new one is 'something known + one new part' and closes out
+         a family;
+      1. families where a sibling is already being learned;
+      2. untouched families: smallest (tightest) first, head first;
+      3. characters with no family.
+    At most one new character per family per day: new siblings learned
+    side by side interfere (the 検/険/験 problem), so the next sibling
+    waits until a later day."""
+    day = today()
+    picked, out = set(), []
+    def key(k):
+        f = home.get(k)
+        if f is None:
+            return (3, LEVEL_ORDER[level(kanji[k]["text"])], 0, k)
+        sib = [x for x in families[f] if x != k]
+        known = sum(kanji[x]["known"] for x in sib)
+        learning = sum(x in state and not kanji[x]["known"] for x in sib)
+        left = sum(not kanji[x]["known"] for x in families[f])
+        lvl = LEVEL_ORDER[level(kanji[k]["text"])]
+        if known:
+            return (0, left, -known / len(families[f]), lvl, k)
+        if learning:
+            return (1, len(families[f]), lvl, 0, k)
+        return (2, len(families[f]), k != f, lvl, k)
+    cands = [k for k in kanji if k not in state and not kanji[k]["known"]
+             and in_levels(kanji, [k], levels)]
+    for k in sorted(cands, key=key):
+        f = home.get(k)
+        if f is not None:
+            if f in picked or any(state.get(x, {}).get("intro") == day for x in families[f]):
+                continue
+            picked.add(f)
+        out.append(k)
+    return out
+
+
+def family_reason(k, kanji, state, families, home):
+    f = home.get(k)
+    if f is None:
+        return "no family"
+    sib = [x for x in families[f] if x != k]
+    known = [x for x in sib if kanji[x]["known"]]
+    if known:
+        return f"family {f}: knows {''.join(known[:4])}"
+    if any(x in state for x in sib):
+        return f"family {f}: sibling in progress"
+    return f"new family {f}" + (" (head)" if k == f else "")
+
+
 def frontier(kanji):
     """Cheapest-first. Kanji hiding inside words you already know come first --
     they cost almost nothing, and they're where your tagging has drifted. Then
@@ -742,6 +821,13 @@ def study(k, d, ctx, n, total, label="new"):
         show_suggested(d)
     if d["vocab"]:
         show_vocab_hint(d, vocab)
+    f = ctx["home"].get(k)
+    if f is not None:
+        sibs = [x for x in ctx["families"][f] if x != k]
+        mark = lambda x: ("✓" if kanji[x]["known"] else "·" if x in ctx["state"] else " ")
+        print(f"  {C['y']}family {f}:{C['0']} " + "  ".join(
+            f"{x} {C['dim']}{short(kanji[x]['text'])}{C['0']} {mark(x)}" for x in sibs[:6])
+            + (f"  {C['dim']}+{len(sibs) - 6}{C['0']}" if len(sibs) > 6 else ""))
     if d["lookalikes"]:
         print(f"  {C['y']}don't confuse with:{C['0']}")
         for k2 in d["lookalikes"]:
@@ -1121,6 +1207,9 @@ def main():
     ap.add_argument("--hard", type=int, nargs="?", const=8, default=None, metavar="N",
                     help=f"re-study and test the N cards missed most ({HARD_LAPSES}+ misses; "
                     "default 8)")
+    ap.add_argument("--clusters", action="store_true",
+                    help="pick new cards family by family (footholds first, one new "
+                    "sibling per family per day) instead of by words unlocked")
     ap.add_argument("--level", metavar="RANGE",
                     help="only these levels, e.g. n5-n4 or n3 (Chinese: 1-2)")
     args = ap.parse_args()
@@ -1135,6 +1224,7 @@ def main():
         "comp_meanings": load_component_meanings(),
         "meaning_idx": build_meaning_index(kanji),
     }
+    ctx["families"], ctx["home"] = build_families(kanji)
     state = load_state()
     ctx["state"] = state
 
@@ -1162,18 +1252,22 @@ def review_session(ctx, state, args, levels):
     reserve = max(0, min(args.reserve, args.new, args.max // 2))
     due = due_all[:args.max - reserve]
     deferred = len(due_all) - len(due)
-    fresh = [k for k in frontier(kanji) if k not in state and in_levels(kanji, [k], levels)
-             ][:max(reserve, args.max - len(due))][:args.new]
+    if args.clusters:
+        pool = cluster_order(kanji, state, ctx["families"], ctx["home"], levels)
+    else:
+        pool = [k for k in frontier(kanji) if k not in state and in_levels(kanji, [k], levels)]
+    fresh = pool[:max(reserve, args.max - len(due))][:args.new]
 
     if args.plan:
         print((f"[{args.level}] " if levels else "") + f"{len(due)} due · {len(fresh)} new queued"
              + (f" · {deferred} due deferred to a later session" if deferred else ""))
         for k in fresh[:25]:
             d = kanji[k]
-            why = (f"in {d['half']} known words" if d["half"]
+            why = (family_reason(k, kanji, state, ctx["families"], ctx["home"]) if args.clusters
+                   else f"in {d['half']} known words" if d["half"]
                    else f"unlocks {d['unlocks']}" if d["unlocks"]
                    else level_label(d["text"]))
-            print(f"  {k}  {C['dim']}{why:22}{C['0']} {meaning(d['text'])[:46]}")
+            print(f"  {k}  {C['dim']}{why:26}{C['0']} {meaning(d['text'])[:46]}")
         return False
 
     if not due and not fresh:
@@ -1218,7 +1312,7 @@ def run_queue(ctx, state, queue):
         result = ask(k, kanji[k], ctx, i, len(queue))
         if result is None:
             break
-        card = schedule(state.get(k, {}), result)
+        card = schedule(state.get(k, {"intro": today()}), result)
         state[k] = card
         graded += 1
         if result == 1 and k not in requeued:
