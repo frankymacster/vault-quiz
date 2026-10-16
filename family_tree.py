@@ -118,15 +118,17 @@ if os.path.exists(kdb_path):
         if not rs:
             continue
         shown = re.split("[／/]", w)[0]
-        gloss = "; ".join(q.meaning(d["text"]).split(";")[:2]).strip()
+        full = q.meaning(d["text"])
+        gloss = "; ".join(full.split(";")[:2]).strip()
         seg = word_align.align(shown, rs[0], kdb)
         words[w] = [shown, word_align.hira(rs[0]), gloss, q.level(d["text"]), int(d["known"]), seg,
-                    sorted(q.accepted_readings(w, d))]
+                    sorted(q.accepted_readings(w, d)), full if full != gloss else 0]
         for c in shown:
             if c in kanji and c not in kun:
                 kun[c] = word_align.readings_of(kdb.get(c, {}))[1][:6]
     data["words"], data["kun"] = words, kun
-    data["vsrs"] = {w: [datetime.date.fromordinal(c["due"]).isoformat(), c.get("lapses", 0)]
+    data["romaji"], data["stop"] = q._ROMAJI, sorted(q.STOPWORDS)
+    data["vsrs"] = {w: [datetime.date.fromordinal(c["due"]).isoformat(), c.get("lapses", 0), c.get("reps", 0)]
                     for w, c in vstate.items() if w in words and not words[w][4] and c.get("due")}
     vprog = collections.defaultdict(lambda: [0, 0, 0, 0, 0])
     for w, x in words.items():

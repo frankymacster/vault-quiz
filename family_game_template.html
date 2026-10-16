@@ -51,6 +51,10 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .prog th:first-child, .prog td:first-child { text-align: left; padding-left: 0; }
 .prog td.pc { color: var(--muted); }
 .prog tr.dim td { color: var(--muted); opacity: .55; }
+.typed-row { display: flex; gap: 10px; width: 100%; }
+.wtype { flex: 1; min-width: 0; font: inherit; font-size: 1.15rem; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--sheet); color: var(--ink); }
+.wtype:focus { outline: none; border-color: var(--indigo); }
+.typed-tag { font-size: .68rem; letter-spacing: .06em; color: var(--indigo); border: 1px solid var(--indigo); border-radius: 6px; padding: 1px 6px; margin-left: 6px; }
 .prog + .prog { margin-top: 10px; }
 .glyph.word { font-size: clamp(2.6rem, 14vw, 4.4rem); letter-spacing: .04em; text-align: center; }
 .wread { font-size: 1.3rem; margin: -6px 0 0; color: var(--indigo); }
@@ -241,6 +245,7 @@ const S = {
   reviewed: store.get("reviewed", {}),
   wseen: store.get("wseen", {}),
   wrev: store.get("wrev", {}),
+  wstreak: store.get("wstreak", {}),
   best: store.get("best", 0),
   streak: 0,
   round: null,
@@ -1020,8 +1025,69 @@ function wordReadingOptions(w) {
   for (const x of shuffle(Object.keys(W)).slice(0, 200)) if (Math.abs(W[x][1].length - right.length) <= 1) add(W[x][1], `that's ${W[x][0]}`);
   return shuffle([{ r: right, why: "" }, ...picked]);
 }
+function wordMeaningOptions(w) {
+  const right = W[w][2], ks = wKanji(w), verb = /^to /.test(right);
+  const picked = [];
+  const add = x => { const g = W[x][2]; if (picked.length < 3 && x !== w && g && !overlaps(g, right) && !picked.some(o => overlaps(o.g, g))) picked.push({ g, w: x }); };
+  for (const x of shuffle(Object.keys(W)).filter(x => ks.some(k => W[x][0].includes(k))).slice(0, 60)) add(x);
+  for (const x of shuffle(Object.keys(W)).slice(0, 300)) if (W[x][3] === W[w][3] && /^to /.test(W[x][2]) === verb) add(x);
+  return shuffle([{ g: right, w }, ...picked]);
+}
+// a part (0 reading, 1 meaning) is typed once you've got it right twice running; a miss brings the choices back
+const wScore = (w, i) => S.wstreak[w] ? S.wstreak[w][i] : (VS[w] ? VS[w][2] || 0 : 0);
+const wTyped = (w, i) => wScore(w, i) >= 2;
+function wBump(w, i, ok) {
+  const st = S.wstreak[w] || [wScore(w, 0), wScore(w, 1)];
+  st[i] = ok ? st[i] + 1 : 0;
+  S.wstreak[w] = st; store.set("wstreak", S.wstreak);
+}
+
+// typed answers, graded like the CLI quiz: readings in romaji or kana, meanings loosely
+const ROMAJI = D.romaji || {}, STOP = new Set(D.stop || []);
+const VOWEL = { a: "あ", i: "い", u: "う", e: "え", o: "お" };
+const VOWEL_OF = { "ゃ": "あ", "ゅ": "う", "ょ": "お", "ぁ": "あ", "ぃ": "い", "ぇ": "え", "ぉ": "お" };
+for (const [r, k] of Object.entries(ROMAJI)) if (k.length === 1) VOWEL_OF[k] = VOWEL[r.slice(-1)];
+function toKana(s) {
+  const out = [];
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i], nxt = s[i + 1] || "";
+    if (!(ch >= "a" && ch <= "z")) { out.push(ch === "-" ? "ー" : ch); i++; continue; }
+    if (ch === "n") {
+      if (nxt === "'") { out.push("ん"); i += 2; continue; }
+      if (nxt === "n") { const after = s[i + 2] || ""; out.push("ん"); i += after && "aeiouy".includes(after) ? 1 : 2; continue; }
+      if (!nxt || !"aeiouy".includes(nxt)) { out.push("ん"); i++; continue; }
+    }
+    if (ch === "m" && (nxt === "b" || nxt === "p")) { out.push("ん"); i++; continue; }
+    if (nxt === ch && !"aeioun".includes(ch)) { out.push("っ"); i++; continue; }
+    let hit = false;
+    for (const size of [3, 2, 1]) {
+      const seg = s.slice(i, i + size);
+      if (ROMAJI[seg]) { out.push(ROMAJI[seg]); i += size; hit = true; break; }
+    }
+    if (!hit) { out.push(ch); i++; }
+  }
+  return out.join("");
+}
+function normReading(s) {
+  const out = [];
+  for (const c of hiraOf(toKana(s.trim().toLowerCase()))) {
+    if (c === "ー" && out.length) out.push(VOWEL_OF[out[out.length - 1]] || "");
+    else if (!" 　・".includes(c)) out.push(c);
+  }
+  return out.join("");
+}
+const singular = w => w.endsWith("ies") && w.length > 4 ? w.slice(0, -3) + "y" : w.endsWith("s") && !w.endsWith("ss") && w.length > 3 ? w.slice(0, -1) : w;
+const sigWords = s => (s.toLowerCase().match(/[a-z']+/g) || []).filter(w => w.length > 2 && !STOP.has(w)).map(singular);
+function isMatch(guess, answer) {
+  const g = sigWords(guess), a = sigWords(answer), A = new Set(a);
+  return g.some(w => A.has(w) || (w.length >= 4 && a.some(x => x.length >= 4 && x.slice(0, 4) === w.slice(0, 4))));
+}
+const fullMeaning = w => W[w][7] || W[w][2];
+
 function wordReadingStep() {
   const R = S.round, w = R.cur.k;
+  if (wTyped(w, 0)) return typedStep(0);
   R.opts = wordReadingOptions(w);
   S.phase = "wreading"; S.locked = false;
   card(`
@@ -1044,7 +1110,7 @@ function answerWordReading(i) {
     S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
     $("check").textContent = `✓ ${W[w][1]}`;
-    setTimeout(wordMeaningStep, 650);
+    setTimeout(afterReading, 650);
   } else {
     S.streak = 0;
     S.phase = "review";
@@ -1052,20 +1118,19 @@ function answerWordReading(i) {
       <p class="verdict"><span class="no">✗</span> <span class="g">${W[w][0]}</span> reads <b>${W[w][1]}</b>. You picked ${o.r}${o.why ? `: ${o.why}` : ""}.</p>
       ${splitHTML(w)}
       <button class="next" type="button" id="cont" data-focus>Continue</button>`);
-    S.afterReview = wordMeaningStep;
+    S.afterReview = afterReading;
     $("cont").addEventListener("click", continueReview);
   }
 }
-function wordMeaningOptions(w) {
-  const right = W[w][2], ks = wKanji(w), verb = /^to /.test(right);
-  const picked = [];
-  const add = x => { const g = W[x][2]; if (picked.length < 3 && x !== w && g && !overlaps(g, right) && !picked.some(o => overlaps(o.g, g))) picked.push({ g, w: x }); };
-  for (const x of shuffle(Object.keys(W)).filter(x => ks.some(k => W[x][0].includes(k))).slice(0, 60)) add(x);
-  for (const x of shuffle(Object.keys(W)).slice(0, 300)) if (W[x][3] === W[w][3] && /^to /.test(W[x][2]) === verb) add(x);
-  return shuffle([{ g: right, w }, ...picked]);
+function afterReading() {
+  const R = S.round;
+  wBump(R.cur.k, 0, R.cur.read);
+  wordMeaningStep();
 }
+
 function wordMeaningStep() {
   const R = S.round, w = R.cur.k;
+  if (wTyped(w, 1)) return typedStep(1);
   R.opts = wordMeaningOptions(w);
   S.phase = "wmeaning"; S.locked = false;
   card(`
@@ -1083,18 +1148,12 @@ function answerWordMeaning(i) {
   if (S.phase !== "wmeaning" || S.locked || i >= R.opts.length) return;
   S.locked = true;
   const w = R.cur.k, o = R.opts[i], ok = o.w === w;
-  R.cur.mean = ok;
-  const t = R.tiles[R.i];
-  record({ step: "word", w, ok: R.cur.read && ok, read_ok: R.cur.read, mean_ok: ok, picked_r: R.cur.pickedR, picked_m: o.w,
-           fresh: !!t.fresh, known: !!W[w][4] });
-  R.results.push({ ...R.cur, retry: !!t.retry });
-  if (R.cur.read && ok) { S.wrev[w] = todayISO(); store.set("wrev", S.wrev); }
-  else t.missed = true;
+  R.cur.mean = ok; R.cur.pickedM = o.w;
   if (ok) {
     S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
     $("check").textContent = `✓ ${W[w][2]}`;
-    setTimeout(wordAdvance, 650);
+    setTimeout(finishWord, 650);
   } else {
     S.streak = 0;
     S.phase = "review";
@@ -1102,10 +1161,81 @@ function answerWordMeaning(i) {
       <p class="verdict"><span class="no">✗</span> <span class="g">${W[w][0]}</span> (${W[w][1]}) means <b>${W[w][2]}</b>. You picked ${o.g}: that's <span class="g">${W[o.w][0]}</span> (${W[o.w][1]}).</p>
       ${splitHTML(w)}
       <button class="next" type="button" id="cont" data-focus>Continue</button>`);
-    S.afterReview = wordAdvance;
+    S.afterReview = finishWord;
     $("cont").addEventListener("click", continueReview);
   }
 }
+
+function typedStep(part) {
+  const R = S.round, w = R.cur.k;
+  R.part = part;
+  S.phase = "wtype"; S.locked = false; S.overrule = null;
+  card(`
+    <p class="q">${part ? "what does it mean?" : "how is it read?"} <span class="typed-tag">type it</span></p>
+    <div class="glyph word">${W[w][0]}</div>
+    ${part ? `<p class="wread">${W[w][1]}</p>` : `<p class="hint">${W[w][3].toUpperCase()} word · romaji or kana</p>`}
+    <div class="typed-row">
+      <input id="wtype" class="wtype" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" lang="${part ? "en" : "ja"}"
+        aria-label="${part ? "Meaning" : "Reading"}" placeholder="${part ? "meaning in English" : "e.g. itadaku"}" data-focus>
+      <button class="next" type="button" id="wcheck">Check</button>
+    </div>
+    <p class="hint" id="wconv"></p>
+    <p class="check" id="check"></p>
+    <p class="sub">one of its meanings is enough · Enter to check, empty to give up</p>`.replace(part ? "" : "one of its meanings is enough · ", ""));
+  const input = $("wtype");
+  input.addEventListener("input", () => { if (!part) $("wconv").textContent = /[a-z]/i.test(input.value) ? "→ " + toKana(input.value.toLowerCase()) : ""; });
+  input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); checkTyped(); } });
+  $("wcheck").addEventListener("click", checkTyped);
+}
+function checkTyped() {
+  const R = S.round;
+  if (S.phase !== "wtype" || S.locked) return;
+  S.locked = true;
+  const w = R.cur.k, part = R.part, guess = $("wtype").value.trim();
+  const ok = !!guess && (part ? isMatch(guess, fullMeaning(w)) : new Set(W[w][6].concat(W[w][1])).has(normReading(guess)));
+  const shown = part ? guess : normReading(guess);
+  if (part) { R.cur.mean = ok; R.cur.pickedM = guess; R.cur.typedM = true; }
+  else { R.cur.read = ok; R.cur.pickedR = shown; R.cur.typedR = true; }
+  const next = part ? finishWord : afterReading;
+  if (ok) {
+    S.streak++; bumpBest();
+    $("check").textContent = `✓ ${part ? fullMeaning(w) : W[w][1]}`;
+    setTimeout(next, part ? 1100 : 750);
+    return;
+  }
+  S.streak = 0;
+  S.phase = "review";
+  S.overrule = () => {
+    if (part) R.cur.mean = true; else R.cur.read = true;
+    S.overrule = null;
+    continueReview();
+  };
+  card(`
+    <p class="verdict"><span class="no">✗</span> <span class="g">${W[w][0]}</span> ${part ? `(${W[w][1]}) means <b>${fullMeaning(w)}</b>` : `reads <b>${W[w][1]}</b>`}.
+      ${guess ? `You typed ${shown}.` : ""} ${part ? "" : "Back to choices next time."}</p>
+    ${splitHTML(w)}
+    <div class="row">
+      <button class="next" type="button" id="cont" data-focus>Continue</button>
+      ${guess ? `<button class="ghost" type="button" id="overrule">I was right (r)</button>` : ""}
+    </div>`);
+  S.afterReview = next;
+  $("cont").addEventListener("click", continueReview);
+  if (guess) $("overrule").addEventListener("click", () => S.overrule && S.overrule());
+}
+
+function finishWord() {
+  const R = S.round, w = R.cur.k, t = R.tiles[R.i];
+  S.overrule = null;
+  wBump(w, 1, R.cur.mean);
+  const ok = R.cur.read && R.cur.mean;
+  record({ step: "word", w, ok, read_ok: R.cur.read, mean_ok: R.cur.mean, picked_r: R.cur.pickedR, picked_m: R.cur.pickedM,
+           typed_r: !!R.cur.typedR, typed_m: !!R.cur.typedM, fresh: !!t.fresh, known: !!W[w][4] });
+  R.results.push({ ...R.cur, retry: !!t.retry });
+  if (ok) { S.wrev[w] = todayISO(); store.set("wrev", S.wrev); }
+  else t.missed = true;
+  wordAdvance();
+}
+
 function wordAdvance() {
   const R = S.round;
   if (S.phase === "wstudy") S.phase = null;
@@ -1302,6 +1432,8 @@ $("quit").addEventListener("click", goHome);
 
 document.addEventListener("keydown", e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (S.phase === "wtype") { if (e.key === "Escape") goHome(); return; }
+  if (S.phase === "review" && e.key === "r" && S.overrule) { e.preventDefault(); S.overrule(); return; }
   if (S.phase === "review" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueReview(); return; }
   // a quick second Enter from the last feedback screen shouldn't skip past the summary
   if (S.phase === "summary" && e.key === "Enter") { e.preventDefault(); if (Date.now() - S.summaryAt > 500) startRound(); return; }
