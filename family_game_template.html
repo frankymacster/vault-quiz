@@ -613,7 +613,7 @@ function pickNewKanji(n) {
   }
   return n > 0 ? out : [];
 }
-function newStudy(k) {
+function newStudy(k, then) {
   const R = S.round, w = anchorOf(k), f = soundFamilyOf(k);
   S.phase = "nstudy";
   S.introDay[famOf[k] || k] = todayISO(); store.set("introDay", S.introDay);
@@ -629,15 +629,16 @@ function newStudy(k) {
     ${D.mnem && D.mnem[k] ? `<p class="mnem">${D.mnem[k]}</p>` : ""}
     ${w ? `<p class="q">a word with it</p><p class="verdict"><span class="g">${W[w][0]}</span> ${W[w][1]} · ${W[w][2]}</p>${splitHTML(w, k)}` : ""}
     <button class="next" type="button" id="cont" data-focus>Got it</button>
-    <p class="sub">you'll build it from memory in a moment</p>`);
+    <p class="sub">${then ? "you'll tell it apart from its look-alikes in a moment" : "you'll build it from memory in a moment"}</p>`);
+  S.afterStudy = then || (() => { const R = S.round; R.i++; R.i < R.tiles.length ? buildTileStart() : endBuild(); });
   $("cont").addEventListener("click", continueNewStudy);
 }
 function continueNewStudy() {
   if (S.phase !== "nstudy") return;
   S.phase = null;
-  const R = S.round;
-  R.i++;
-  R.i < R.tiles.length ? buildTileStart() : endBuild();
+  const next = S.afterStudy;
+  S.afterStudy = null;
+  next();
 }
 
 function startBuild(pick) {
@@ -1346,12 +1347,15 @@ function startLookalikes(given) {
   }
   const tiles = [];
   groups.forEach((g, gi) => {
+    // a member you haven't started is taught first; its first meaning answer then starts it
+    const unstarted = g.filter(k => kStatus(k) === "new");
+    unstarted.forEach(k => tiles.push({ kind: "study", k, g, gi }));
     // spot what they share, then what each one adds, then see them side by side
     const { shared, diff } = groupParts(g);
     if (shared.length) tiles.push({ kind: "shared", g, gi });
     for (const k of g) if (diff[k].length) tiles.push({ kind: "diff", k, g, gi });
     tiles.push({ kind: "compare", g, gi });
-    shuffle(g.slice()).forEach(k => tiles.push({ kind: "type", k, g, gi }));
+    shuffle(g.slice()).forEach(k => tiles.push({ kind: "type", k, g, gi, fresh: unstarted.includes(k) }));
     shuffle(g.slice()).forEach(k => tiles.push({ kind: "rev", k, g, gi }));
   });
   S.round = { looks: true, groups, fams: [], tiles, i: 0, results: [],
@@ -1434,6 +1438,7 @@ function lookTile() {
   const R = S.round, t = R.tiles[R.i];
   S.overrule = null;
   renderBar();
+  if (t.kind === "study") return newStudy(t.k, lookAdvance);
   if (t.kind === "shared" || t.kind === "diff") return lookPick(t);
   if (t.kind === "compare") return lookCompare(t.g);
   if (t.kind === "type") return lookType(t);
@@ -1492,8 +1497,8 @@ function clueHTML(k, other) {
 // the first answer is what counts for the schedule; the rest is practice until it's right
 function firstTry(t, ok, extra) {
   if (t.tries) return;
-  record({ step: "meaning", k: t.k, status: K[t.k][2], typed: true, ok, due: !!isDue(t.k), ...extra });
-  countKanji(t.k, ok, false);
+  record({ step: "meaning", k: t.k, status: K[t.k][2], typed: true, ok, due: !!isDue(t.k), ...(t.fresh ? { fresh: true } : {}), ...extra });
+  countKanji(t.k, ok, !!t.fresh);
   pushRecent(ok);
   S.round.results.push({ k: t.k, ok, retry: !!t.retry, gi: t.gi });
   if (!ok) { t.missed = true; S.streak = 0; } else { S.streak++; bumpBest(); }
@@ -1567,7 +1572,7 @@ function lookAdvance() {
   if (t.missed && !t.retry && (t.kind === "type" || t.kind === "rev")) {
     let end = R.i + 1;
     while (end < R.tiles.length && R.tiles[end].gi === t.gi) end++;
-    R.tiles.splice(end, 0, { ...t, missed: false, retry: true, tries: 0 });
+    R.tiles.splice(end, 0, { ...t, missed: false, retry: true, tries: 0, fresh: false });
   }
   R.i++;
   R.i < R.tiles.length ? lookTile() : endLookalikes();
