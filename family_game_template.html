@@ -298,7 +298,7 @@ const kCard = k => S.ov[k] || fromSync(SRS[k]);
 const wCard = w => S.wov[w] || fromSync(VS[w]);
 const kKnown = k => K[k][2] === "known" || !!(S.ov[k] && S.ov[k].known);
 function dayLog() {
-  if (S.day.date !== todayISO()) { S.day = { date: todayISO(), reviews: 0, started: 0, misses: 0, matured: 0, words: 0 }; }
+  if (S.day.date !== todayISO()) { S.day = { date: todayISO(), reviews: 0, started: 0, misses: 0, matured: 0, words: 0, wordBlocks: 0 }; }
   return S.day;
 }
 // one answer, as game_sync.py will count it: a miss is a lapse; a right answer moves the card only when due;
@@ -1794,8 +1794,16 @@ function bumpBest() {
 
 // ======================= today's plan: reviews on time, contrast right after a mix-up, anchor words, then new kanji
 const targetLevel = () => LV.find(l => Object.keys(K).some(k => K[k][1] === l && kStatus(k) === "new")) || LV[LV.length - 1];
-const SECOND_AFTER = 4 * 3600;
-// kanji started today, at least four hours ago, not yet seen again today
+// the plan's one word block a day: words that still carry a kanji you're learning first; words whose kanji
+// you all know only fill what's left (the kanji are the focus, words are there to anchor them)
+function planWords() {
+  const open = w => wKanji(w).some(k => kStatus(k) !== "known");
+  const due = dueWords();
+  return due.filter(open).concat(due.filter(w => !open(w)));
+}
+const SECOND_AFTER = 30 * 60;
+// kanji started today, at least half an hour ago (a long sitting reaches that; so does coming back later),
+// not yet seen again today
 function secondLook() {
   const now = Date.now() / 1000, today = todayISO();
   const todays = Object.keys(S.startedAt).filter(k => K[k] && isoOf(new Date(S.startedAt[k] * 1000)) === today && S.second[k] !== today && !kKnown(k));
@@ -1827,9 +1835,11 @@ function planDecide() {
     S.mode = "build"; S.planLevels = LV; startBuild({ due: ks, fresh: [] });
     S.round.notice = "second look: learned earlier today";
   } };
-  const dw = HAS_WORDS ? dueWords() : [];
+  const dw = HAS_WORDS && (dayLog().wordBlocks || 0) < 1 ? planWords() : [];
   if (dw.length) return { label: `Anchor words: ${Math.min(6, dw.length)} of ${dw.length} due`, run: () => {
-    S.mode = "words"; S.planLevels = LV; startWords(dueWords().slice(0, 6));
+    S.mode = "words"; S.planLevels = LV;
+    dayLog().wordBlocks = (dayLog().wordBlocks || 0) + 1; store.set("day", S.day);
+    startWords(planWords().slice(0, 6));
   } };
   const lvl = targetLevel();
   S.planLevels = [lvl];
@@ -1850,7 +1860,8 @@ function planStrip() {
     (d.misses ? ` · ${d.misses} misses` : "") + `</p>`;
 }
 function planDone() {
-  S.mode = "build"; S.planLevels = null;
+  S.mode = "build";
+  S.planLevels = LV; const dwN = HAS_WORDS ? dueWords().length : 0; S.planLevels = null;
   show("play");
   S.phase = "plandone";
   const tomorrow = addDays(1), d = dayLog();
@@ -1859,13 +1870,15 @@ function planDone() {
     <p class="q">today's plan</p>
     <p class="verdict">Done for today: ${d.reviews} reviews, ${d.started} new kanji, ${d.words} word answers.</p>
     ${planStrip()}
-    ${(() => { const w = secondLook(); return w.waiting.length ? `<p class="verdict">Come back after <b>${hhmm(w.opensAt)}</b> for a 3-minute second look at today's ${w.waiting.length} new kanji: seeing them again later today is what gets them to tomorrow.</p>` : ""; })()}
+    ${(() => { const w = secondLook(); return w.waiting.length ? `<p class="verdict">A second look at today's ${w.waiting.length} new kanji opens at <b>${hhmm(w.opensAt)}</b>, half an hour after you started them. Seeing them again later today is what gets them to tomorrow: start the plan again then, or keep going with lookalikes until it opens.</p>` : ""; })()}
     <p class="hint">${dueTomorrow} kanji are due by tomorrow. Stopping here is fine: spacing is what makes it last.
       ${newLeft() === 0 && newCandidates().length ? "New kanji are paused for today so your reviews keep up." : ""}</p>
     <div class="row">
       <button class="next" type="button" id="home-btn" data-focus>Back to start</button>
       <button class="ghost" type="button" id="more-btn">Keep going: lookalikes of your hard kanji</button>
+      ${dwN ? `<button class="ghost" type="button" id="words-btn">${dwN} words still due: review them</button>` : ""}
     </div>`);
+  if ($("words-btn")) $("words-btn").addEventListener("click", () => { S.inPlan = false; S.mode = "words"; S.planLevels = LV; startWords(dueWords().slice(0, 6)); });
   $("home-btn").addEventListener("click", goHome);
   $("more-btn").addEventListener("click", () => { S.inPlan = false; S.mode = "lookalikes"; startLookalikes(); });
 }
