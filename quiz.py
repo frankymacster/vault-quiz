@@ -752,10 +752,10 @@ RETRY_MENU = menu("try again", [
 ])
 
 
-STRAY_KEYS = {"c", "v", "s", "m", "w", "r", "g", "q", "k", "h"}   # every letter that means
-                                                   # something elsewhere in
-                                                   # the menus -- typed here
-                                                   # out of habit, not content
+STRAY_KEYS = {"c", "v", "s", "m", "w", "r", "g", "q", "k", "h",   # every letter that means
+              "none", "no", "n/a", "na", "-", "skip", "nothing"}  # something elsewhere in the menus,
+                                                   # and the ways of saying "no mnemonic" --
+                                                   # typed here out of habit, not content
 
 
 def save_mnemonic_if_real(d, text, verb):
