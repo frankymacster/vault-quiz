@@ -144,6 +144,10 @@ if os.path.exists(kdb_path):
             r[3] += vstate[w].get("ivl", 0) >= 14
             r[4] += q.is_hard(vstate[w])
     data["vprogress"] = [[lvl] + vprog[lvl] for lvl in q.P["levels"] if vprog[lvl][0]]
+# wrong picks per kanji ({kanji: {pick: n}}, kept by game_sync): pairs picked twice get a look-first step
+cpath = os.path.join(q.VAULT, ".game_confusions.json")
+conf = json.load(open(cpath, encoding="utf-8")) if os.path.exists(cpath) else {}
+data["confused"] = {k: {o: n for o, n in m.items() if o in pool} for k, m in conf.items() if k in pool}
 # lookalikes (from the notes; game_sync adds your mix-ups), the meanings a typed answer is graded on, and mnemonics
 data["looks"] = {k: [x for x in kanji[k]["lookalikes"] if x in pool] for k in pool if kanji[k]["lookalikes"]}
 data["answer"] = {k: q.answer_text(kanji[k]["text"]) for k in pool}

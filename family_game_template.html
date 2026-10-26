@@ -103,6 +103,8 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .wtype.bad { border-color: var(--bad); background: var(--bad-bg); }
 .cxmiss { display: grid; gap: 12px; justify-items: center; width: 100%; }
 .miss-note { color: var(--bad); font-weight: 600; margin: 0; max-width: 46ch; }
+.choice.picked { border-color: var(--indigo); }
+.conf { display: grid; gap: 10px; justify-items: center; margin-top: 6px; }
 .choice.wrong { pointer-events: none; opacity: .8; }
 .q { font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0; }
 .glyph { font-family: var(--glyph); font-weight: 700; font-size: 6rem; line-height: 1; margin: 4px 0; }
@@ -261,8 +263,7 @@ const S = {
   planMix: [],
   wstreak: store.get("wstreak", {}),
   mixups: store.get("mixups", {}),
-  best: store.get("best", 0),
-  streak: 0,
+  confused: store.get("confused", {}),
   round: null,
   // what Enter / 1-4 act on right now: "family" | "meaning" | "review" | "summary" | null
   phase: null,
@@ -281,18 +282,21 @@ const isoOf = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0
 const todayISO = () => isoOf(new Date());
 const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return isoOf(d); };
 // SM-2 as in quiz.py's schedule()
+const pyRound = x => { const f = Math.floor(x), d = x - f; return d < .5 ? f : d > .5 ? f + 1 : (f % 2 === 0 ? f : f + 1); };
 function sm2(c, grade) {
   let { ease = 2.5, reps = 0, ivl = 0, lapses = 0 } = c;
   if (grade === 1) { reps = 0; ivl = 0; ease = Math.max(1.3, ease - .2); lapses++; }
   else {
     const stepping = lapses >= HARD_LAPSES && reps < HARD_STEPS.length;
-    ivl = stepping ? HARD_STEPS[reps] : reps === 0 ? 1 : reps === 1 ? 6 : Math.max(1, Math.round(ivl * ease));
+    ivl = stepping ? HARD_STEPS[reps] : reps === 0 ? 1 : reps === 1 ? 6 : Math.max(1, pyRound(ivl * (grade >= 3 ? ease : 1.2)));
+    if (grade === 2) ease = Math.max(1.3, ease - .15);
     reps++;
   }
   return { ease: Math.round(ease * 100) / 100, reps, ivl, lapses, due: addDays(ivl) };
 }
 const fromSync = a => a && { due: a[0], lapses: a[1], reps: a[2], ivl: a[3], ease: a[4] };
 // answers already in the vault (made before the last sync) are dropped from the local layer
+for (const m of Object.values(S.confused)) for (const [o, e] of Object.entries(m)) if (e.t < (D.synced || 0)) delete m[o];
 for (const key of ["ov", "wov"]) for (const [x, c] of Object.entries(S[key])) if (c.t < (D.synced || 0)) delete S[key][x];
 const kCard = k => S.ov[k] || fromSync(SRS[k]);
 const wCard = w => S.wov[w] || fromSync(VS[w]);
@@ -303,16 +307,16 @@ function dayLog() {
 }
 // one answer, as game_sync.py will count it: a miss is a lapse; a right answer moves the card only when due;
 // a first test after studying starts the card
-function applyAnswer(card, ok, fresh) {
+function applyAnswer(card, ok, fresh, conf) {
   if (!card) return fresh ? { card: sm2({}, ok ? 3 : 1), what: "started" } : null;
   if (!ok) return { card: sm2(card, 1), what: "misses" };
-  if (card.due <= todayISO()) return { card: sm2(card, 3), what: "reviews" };
+  if (card.due <= todayISO()) return { card: sm2(card, conf === "unsure" ? 2 : 3), what: "reviews" };
   return null;
 }
-function countKanji(k, ok, fresh) {
+function countKanji(k, ok, fresh, conf) {
   if (ok) { S.reviewed[k] = todayISO(); store.set("reviewed", S.reviewed); }
   if (!K[k] || kKnown(k)) return;
-  const r = applyAnswer(kCard(k), ok, fresh);
+  const r = applyAnswer(kCard(k), ok, fresh, conf);
   if (!r) return;
   const log = dayLog();
   log[r.what]++;
@@ -362,8 +366,6 @@ const dbReady = (window.claude && window.claude.use ? window.claude.use("db") : 
       const p = snap.data();
       (p.builtKanji || []).forEach(k => S.builtKanji.add(k));
       (p.learnedSound || []).forEach(f => S.learnedSound.add(f));
-      if ((p.best || 0) > S.best) S.best = p.best;
-      store.set("best", S.best);
       renderHome();
     }).catch(() => {});
   });
@@ -382,7 +384,7 @@ function flushResults() {
   const db = results.db;
   if (!db) return;
   const body = { started: results.started, updated: new Date().toISOString(), events: results.events.slice() };
-  const progress = { builtKanji: [...S.builtKanji], learnedSound: [...S.learnedSound], best: S.best, updated: body.updated };
+  const progress = { builtKanji: [...S.builtKanji], learnedSound: [...S.learnedSound], updated: body.updated };
   const docId = results.id + (results.part ? "-" + results.part : "");
   // a very long visit moves on to a fresh document once this one is saved (documents cap at 256 KiB)
   if (results.events.length > 1500) { results.part++; results.events = []; }
@@ -427,6 +429,20 @@ function card(html) {
   const first = c.querySelector("[data-focus]");
   if (first) first.focus();
 }
+// a right answer waits for you: Enter or the button moves on, so the pace is yours (not a timer's)
+function proceed(fn) {
+  S.phase = "okwait"; S.afterOk = fn; S.okAt = Date.now();
+  const box = document.querySelector("#card .step");
+  if (box && box.insertAdjacentHTML) box.insertAdjacentHTML("beforeend", `<button class="next" type="button" id="okcont" data-focus>Continue</button>`);
+  const b = $("okcont");
+  if (b) { b.addEventListener("click", okContinue); if (b.focus) b.focus(); }
+}
+function okContinue() {
+  if (S.phase !== "okwait") return;
+  const f = S.afterOk;
+  S.afterOk = null; S.phase = null;
+  f();
+}
 function shake(el) {
   if (!el || !el.classList) return;
   el.classList.remove("shake"); void el.offsetWidth; el.classList.add("shake");
@@ -436,7 +452,7 @@ function renderBar() {
   $("b-pos").textContent = `${Math.min(R.i + 1, R.tiles.length)} / ${R.tiles.length}` + (R.build && R.steps ? ` · step ${R.si + 1} of ${R.steps.length}` : "");
   $("b-track").style.width = `${100 * R.i / R.tiles.length}%`;
   const t = R.tiles[R.i];
-  $("b-streak").textContent = [t && t.retry ? "again" : "", R.notice || "", S.streak ? `streak ${S.streak}` : ""].filter(Boolean).join(" · ");
+  $("b-streak").textContent = [t && t.retry ? "again" : "", R.notice || ""].filter(Boolean).join(" · ");
 }
 
 function startRound() {
@@ -465,6 +481,7 @@ function rivals(k) {
 }
 function meaningStep() {
   const R = S.round, t = R.tiles[R.i], { k } = t;
+  if (!t.fresh && !t.rival && !t.lookDone) { const x = reflexRival(k); if (x) { t.lookDone = true; return lookFirst(k, x); } }
   const rv = t.fresh ? [] : rivals(k).slice(0, 3);
   // half the time in review: the meaning, and which of its look-alikes it is
   R.rev = rv.length >= 2 && Math.random() < .5;
@@ -494,29 +511,67 @@ function meaningStep() {
   document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerMeaning(+b.dataset.i)));
 }
 
+// how sure were you? asked on kanji with misses on record, on pairs you've confused, and on one in four of the rest.
+// Right but unsure comes back sooner; wrong but sure is the error worth fixing, so its drill runs longer.
+// wrong picks counted per kanji and pick: from the vault (D.confused, as of the last sync) plus this browser since
+function bumpConfused(k, other) {
+  if (!K[other] || other === k) return;
+  const m = S.confused[k] = S.confused[k] || {}, e = m[other] || { n: 0, t: 0 };
+  e.n++; e.t = Math.floor(Date.now() / 1000); m[other] = e;
+  store.set("confused", S.confused);
+}
+function confusedWith(k) {
+  const out = { ...((D.confused || {})[k] || {}) };
+  for (const [o, e] of Object.entries(S.confused[k] || {})) out[o] = (out[o] || 0) + e.n;
+  return out;
+}
+// the kanji you've picked wrong for k at least twice, if a part tells the two apart
+function reflexRival(k) {
+  return Object.entries(confusedWith(k)).filter(([o, n]) => n >= 2 && K[o] && groupParts([k, o]).diff[k].length).sort((a, b) => b[1] - a[1]).map(x => x[0])[0] || null;
+}
+function needConfidence(k) { const c = kCard(k); return (c && c.lapses > 0) || !!reflexRival(k) || Math.random() < .25; }
 function answerMeaning(i) {
-  const R = S.round;
+  const R = S.round, t = R.tiles[R.i];
   if (S.phase !== "meaning" || S.locked) return;
   S.locked = true;
+  if (!t.fresh && needConfidence(t.k)) {
+    document.querySelectorAll(".choice")[i].classList.add("picked");
+    S.phase = "conf"; S.confAt = Date.now(); S.confPick = i;
+    const box = document.querySelector("#card .step");
+    if (box && box.insertAdjacentHTML) box.insertAdjacentHTML("beforeend", `<div class="conf" id="conf"><p class="q">how sure were you?</p>
+      <div class="row"><button class="next" type="button" data-c="sure"><span class="key">1</span> Sure</button><button class="ghost" type="button" data-c="unsure"><span class="key">2</span> Not sure</button></div></div>`);
+    document.querySelectorAll("#conf button").forEach(b => b.addEventListener("click", () => answerConf(b.dataset.c)));
+    return;
+  }
+  settleMeaning(i, null);
+}
+function answerConf(c) {
+  if (S.phase !== "conf" || Date.now() - S.confAt < 300) return;
+  S.phase = "meaning";
+  settleMeaning(S.confPick, c);
+}
+function settleMeaning(i, conf) {
+  const R = S.round;
   const { k, f } = R.tiles[R.i];
   const right = K[k][0], other = R.opts[i].k, ok = other === k;
   R.results[R.results.length - 1].mean = ok;
   const fresh = !!R.tiles[R.i].fresh;
-  record({ step: "meaning", k, status: K[k][2], picked: other, ok, options: R.opts.map(o => o.k), due: !!isDue(k), ...(fresh ? { fresh } : {}) });
-  countKanji(k, ok, fresh);
+  record({ step: "meaning", k, status: K[k][2], picked: other, ok, options: R.opts.map(o => o.k), due: !!isDue(k), ...(fresh ? { fresh } : {}), ...(conf ? { conf } : {}) });
+  countKanji(k, ok, fresh, conf);
   pushRecent(ok);
-  if (!ok) addMixup(k, other);
+  if (!ok) { addMixup(k, other); bumpConfused(k, other); }
   if (ok) {
-    S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
-    $("check").innerHTML = `✓ ${R.rev ? k + " " : ""}${right}${whyHTML(k)}`;
-    setTimeout(buildAdvance, 1500);
+    $("check").innerHTML = `✓ ${R.rev ? k + " " : ""}${right}${whyHTML(k)}${conf === "unsure" ? `<span class="why">you weren't sure: it comes back sooner</span>` : ""}`;
+    proceed(buildAdvance);
   } else {
-    S.streak = 0; R.tiles[R.i].missed = true; S.partsOk[k] = 0; store.set("partsOk", S.partsOk);
+    R.tiles[R.i].missed = true; S.partsOk[k] = 0; store.set("partsOk", S.partsOk);
     const btn = document.querySelectorAll(".choice")[i];
-    btn.classList.add("wrong"); shake(btn);
-    const lead = R.rev ? `<b>${right}</b> is ${k}; ${other} means ${K[other][0]}.` : `${k} means <b>${right}</b>; you picked the meaning of ${other}.`;
-    setTimeout(() => startContrast(k, [other, ...rivals(k).filter(x => x !== other).slice(0, 1)], buildAdvance, 0, lead), 700);
+    btn.classList.remove("picked"); btn.classList.add("wrong"); shake(btn);
+    const sure = conf === "sure";
+    const lead = (sure ? "You were sure, so this is the pair worth fixing. " : "") +
+      (R.rev ? `<b>${right}</b> is ${k}; ${other} means ${K[other][0]}.` : `${k} means <b>${right}</b>; you picked the meaning of ${other}.`);
+    setTimeout(() => startContrast(k, [other, ...rivals(k).filter(x => x !== other).slice(0, 1)], buildAdvance, 0, lead, sure ? 3 : 2), 700);
   }
 }
 
@@ -737,12 +792,10 @@ function checkParts() {
   S.partsOk[k] = ok ? (S.partsOk[k] || 0) + 1 : 0; store.set("partsOk", S.partsOk);
   record({ step: "build_parts", k, status: K[k][2], right: mine, picked, ok });
   if (ok) {
-    S.streak++; bumpBest();
     card(`<p class="q">which parts is it made of?</p><div class="glyph">${k}</div>
       ${partsRow(k, "right", "built from")}<p class="check">✓</p>`);
-    setTimeout(buildAdvance, 650);
+    proceed(buildAdvance);
   } else {
-    S.streak = 0;
     const missed = mine.filter(c => !picked.includes(c)), extra = picked.filter(c => !mine.includes(c));
     S.phase = "review";
     card(`
@@ -756,13 +809,44 @@ function checkParts() {
   }
 }
 
-function spotStep() {
-  const R = S.round, t = R.tiles[R.i], { k } = t, x = t.rival;
+function diffOptions(R, k, x) {
   const { shared, diff } = groupParts([k, x]);
   R.right = diff[k];
   const pool = new Set([...ownParts(k), ...ownParts(x), ...shared].filter(c => c !== k && c !== x));
   R.opts = shuffle([...pool].concat(shuffle(ALL_PARTS.filter(c => !pool.has(c) && c !== k && c !== x)).slice(0, 2))).slice(0, 6);
   if (!R.right.some(c => R.opts.includes(c))) R.opts[0] = R.right[0], R.opts = shuffle(R.opts);
+}
+// before the meaning of a kanji you keep mixing up, look at what sets it apart: the choices wait for that
+function lookFirst(k, x) {
+  const R = S.round;
+  diffOptions(R, k, x);
+  R.firstRival = x;
+  S.phase = "lfirst"; S.locked = false;
+  renderBar();
+  card(`
+    <p class="q">you've mixed these up before: what makes <span class="g">${k}</span> different from <span class="g">${x}</span>?</p>
+    <div class="lglyphs"><span class="on">${k}</span><span>${x}</span></div>
+    <div class="choices fam" role="group" aria-label="Parts">
+      ${R.opts.map((c, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${c}</span><span class="m">${D.parts[c] || (K[c] ? K[c][0] : "")}</span></button>`).join("")}
+    </div>
+    <p class="check" id="check"></p>
+    <p class="sub">look first: the meaning question comes next</p>`);
+  document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerLookFirst(+b.dataset.i)));
+}
+function answerLookFirst(i) {
+  const R = S.round, k = R.tiles[R.i].k, x = R.firstRival;
+  if (S.phase !== "lfirst" || S.locked || i >= R.opts.length) return;
+  S.locked = true;
+  const c = R.opts[i], ok = R.right.includes(c), btns = document.querySelectorAll(".choice");
+  record({ step: "look_first", k, rival: x, right: R.right, picked: c, ok });
+  if (!ok) { btns[i].classList.add("wrong"); shake(btns[i]); R.opts.forEach((o, j) => { if (R.right.includes(o)) btns[j].classList.add("right"); }); }
+  else btns[i].classList.add("right");
+  $("check").innerHTML = `${ok ? "✓" : "✗"} ${k} has ${R.right.map(o => `${o} ${D.parts[o] || (K[o] ? K[o][0] : "")}`).join(" + ")}; ${x} doesn't.`;
+  proceed(meaningStep);
+}
+function spotStep() {
+  const R = S.round, t = R.tiles[R.i], { k } = t, x = t.rival;
+  diffOptions(R, k, x);
   S.phase = "spot"; S.locked = false;
   renderBar();
   card(`
@@ -784,14 +868,13 @@ function answerSpot(i) {
   record({ step: "build_spot", k: t.k, rival: t.rival, right: R.right, picked: c, ok });
   const btn = document.querySelectorAll(".choice")[i];
   if (ok) {
-    S.streak++; bumpBest();
     btn.classList.add("right");
     $("check").innerHTML = `✓ ${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}${whyHTML(t.k)}`;
-    setTimeout(buildAdvance, 1200);
+    proceed(buildAdvance);
     return;
   }
   // the quick version missed: back to the full grid next time, and a closer look now
-  S.streak = 0; S.partsOk[t.k] = 0; store.set("partsOk", S.partsOk);
+  S.partsOk[t.k] = 0; store.set("partsOk", S.partsOk);
   btn.classList.add("wrong"); shake(btn);
   setTimeout(() => startContrast(t.k, [t.rival], buildAdvance, 0,
     `${t.k} has ${R.right.join(" + ")}; ${c} is ${ownParts(t.rival).includes(c) ? "in " + t.rival + " too" : "in neither"}.`), 700);
@@ -823,12 +906,10 @@ function answerSoundPart(i) {
   R.results[R.results.length - 1].sound = ok;
   record({ step: "build_sound", k, status: K[k][2], right, picked: R.opts[i], ok, hinted: !!R.hinted });
   if (ok) {
-    S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
     $("check").textContent = `✓ ${right}${D.partOn && D.partOn[right] ? " " + D.partOn[right] : ""}`;
-    setTimeout(buildAdvance, 600);
+    proceed(buildAdvance);
   } else {
-    S.streak = 0;
     S.phase = "review";
     card(`
       <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> gets its sound from <span class="g">${right}</span>${D.partOn && D.partOn[right] ? " (" + D.partOn[right] + ")" : ""}; <span class="g">${R.opts[i]}</span> carries the meaning</p>
@@ -872,12 +953,10 @@ function answerBuildReading(i) {
   R.results[R.results.length - 1].reading = ok;
   record({ step: "build_reading", k, status: K[k][2], right, picked: R.opts[i], ok });
   if (ok) {
-    S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
     $("check").textContent = `✓ ${right}`;
-    setTimeout(buildAdvance, 650);
+    proceed(buildAdvance);
   } else {
-    S.streak = 0;
     const snd = Object.keys((D.roles && D.roles[k]) || {}).find(c => D.roles[k][c] === "s");
     S.phase = "review";
     card(`
@@ -935,12 +1014,10 @@ function answerAnchor(i) {
   record({ step: "word", w, ok, read_ok: ok, mean_ok: null, picked_r: o.r, anchor: true, known: !!W[w][4] });
   countWord(w, ok);
   if (ok) {
-    S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
     $("check").textContent = `✓ ${W[w][1]} · ${W[w][2]}`;
-    setTimeout(buildAdvance, 900);
+    proceed(buildAdvance);
   } else {
-    S.streak = 0;
     S.phase = "review";
     card(`
       <p class="verdict"><span class="no">✗</span> <span class="g">${W[w][0]}</span> reads <b>${W[w][1]}</b> (${W[w][2]}). You picked ${o.r}${o.why ? `: ${o.why}` : ""}.</p>
@@ -1151,12 +1228,10 @@ function answerWordReading(i) {
   const w = R.cur.k, o = R.opts[i], ok = o.r === W[w][1];
   R.cur.read = ok; R.cur.pickedR = o.r;
   if (ok) {
-    S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
     $("check").textContent = `✓ ${W[w][1]}`;
-    setTimeout(afterReading, 650);
+    proceed(afterReading);
   } else {
-    S.streak = 0;
     S.phase = "review";
     card(`
       <p class="verdict"><span class="no">✗</span> <span class="g">${W[w][0]}</span> reads <b>${W[w][1]}</b>. You picked ${o.r}${o.why ? `: ${o.why}` : ""}.</p>
@@ -1192,12 +1267,10 @@ function answerWordMeaning(i) {
   const w = R.cur.k, o = R.opts[i], ok = o.w === w;
   R.cur.mean = ok; R.cur.pickedM = o.w;
   if (ok) {
-    S.streak++; bumpBest();
     document.querySelectorAll(".choice")[i].classList.add("right");
     $("check").textContent = `✓ ${W[w][2]}`;
-    setTimeout(finishWord, 650);
+    proceed(finishWord);
   } else {
-    S.streak = 0;
     S.phase = "review";
     card(`
       <p class="verdict"><span class="no">✗</span> <span class="g">${W[w][0]}</span> (${W[w][1]}) means <b>${W[w][2]}</b>. You picked ${o.g}: that's <span class="g">${W[o.w][0]}</span> (${W[o.w][1]}).</p>
@@ -1233,12 +1306,10 @@ function checkTyped() {
   const ok = !!guess && isMatch(guess, fullMeaning(w));
   R.cur.mean = ok; R.cur.pickedM = guess; R.cur.typedM = true;
   if (ok) {
-    S.streak++; bumpBest();
     $("check").textContent = `✓ ${fullMeaning(w)}`;
-    setTimeout(finishWord, 1100);
+    proceed(finishWord);
     return;
   }
-  S.streak = 0;
   S.phase = "review";
   S.overrule = () => { R.cur.mean = true; S.overrule = null; continueReview(); };
   card(`
@@ -1422,7 +1493,7 @@ function checkLookPick() {
   const picked = [...R.sel].map(i => R.opts[i]);
   const ok = picked.length === R.right.length && R.right.every(c => picked.includes(c));
   record({ step: t.kind === "shared" ? "look_shared" : "look_diff", k: t.k || null, group: t.g, right: R.right, picked, ok });
-  if (ok) { S.streak++; bumpBest(); } else { S.streak = 0; t.missed = true; }
+  if (!ok) t.missed = true;
   const what = t.kind === "shared"
     ? `They share ${R.right.map(c => `<span class="g">${c}</span>`).join(" + ")}`
     : `<span class="g">${t.k}</span> adds ${R.right.map(c => `<span class="g">${c}</span> ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}`;
@@ -1501,12 +1572,12 @@ function firstTry(t, ok, extra) {
   countKanji(t.k, ok, !!t.fresh);
   pushRecent(ok);
   S.round.results.push({ k: t.k, ok, retry: !!t.retry, gi: t.gi });
-  if (!ok) { t.missed = true; S.streak = 0; } else { S.streak++; bumpBest(); }
+  if (!ok) t.missed = true;
 }
 function lookRight(t) {
   $("check").textContent = `✓ ${kAnswer(t.k)}`;
   S.locked = true;
-  setTimeout(lookAdvance, 1100);
+  proceed(lookAdvance);
 }
 function checkLook() {
   const R = S.round, t = R.tiles[R.i];
@@ -1517,6 +1588,7 @@ function checkLook() {
   const ok = isMatch(guess, kAnswer(k));
   const other = !ok ? t.g.find(x => x !== k && isMatch(guess, kAnswer(x))) : null;
   firstTry(t, ok, { guess, picked: other || null });
+  if (other) bumpConfused(k, other);
   if (t.tries) record({ step: "look_again", k, guess, ok, how: "typed" });
   // right on the second try counts as one of the two in a row
   if (ok) return t.tries ? startContrast(k, others, lookAdvance, 1, `✓ ${k} means <b>${kAnswer(k)}</b>.`) : lookRight(t);
@@ -1554,13 +1626,12 @@ function answerLookRev(i) {
   record({ step: "look_reverse", k: t.k, picked, ok });
   R.results.push({ k: t.k, rev: true, ok, retry: !!t.retry, gi: t.gi });
   if (ok) {
-    S.streak++; bumpBest();
     btn.classList.add("right");
     $("check").textContent = `✓ ${t.k}`;
-    setTimeout(lookAdvance, 650);
+    proceed(lookAdvance);
     return;
   }
-  S.streak = 0; t.missed = true;
+  t.missed = true;
   btn.classList.add("wrong"); shake(btn);
   setTimeout(() => startContrast(t.k, [picked, ...t.g.filter(x => x !== t.k && x !== picked)], lookAdvance, 0,
     `<b>${K[t.k][0]}</b> is ${t.k}; you picked ${picked}, ${K[picked][0]}.`), 700);
@@ -1607,10 +1678,10 @@ function endLookalikes() {
 // the questions come from different sides (meaning → kanji, kanji → meaning, the part that differs)
 // so it's the nuance that gets learned, not the position of an answer
 const CX_GOAL = 2, CX_MAX = 10;
-function startContrast(k, others, then, streak, lead) {
+function startContrast(k, others, then, streak, lead, goal) {
   const set = [k, ...others.filter(x => K[x] && x !== k)].slice(0, 3);
   if (set.length < 2) return then();
-  S.cx = { k, set, streak: streak || 0, n: 0, then, last: null };
+  S.cx = { k, set, streak: streak || 0, goal: goal || CX_GOAL, n: 0, then, last: null };
   record({ step: "contrast_start", k, set });
   cxIntro(lead);
 }
@@ -1630,7 +1701,7 @@ function cxIntro(lead) {
     ${lead ? `<p class="hint">${lead}</p>` : ""}
     <p class="verdict">${notice}</p>
     ${groupHTML(set, k)}
-    <p class="hint">A few quick questions on just these, until you tell them apart twice in a row.</p>
+    <p class="hint">A few quick questions on just these, until you tell them apart ${S.cx.goal === 3 ? "three times" : "twice"} in a row.</p>
     <button class="next" type="button" id="cont" data-focus>Let's look</button>`);
   $("cont").addEventListener("click", cxNext);
 }
@@ -1648,12 +1719,12 @@ function cxQuestion() {
 }
 function cxNext() {
   const c = S.cx;
-  if (c.streak >= CX_GOAL || c.n >= CX_MAX) return cxDone();
+  if (c.streak >= c.goal || c.n >= CX_MAX) return cxDone();
   const q = c.q = cxQuestion();
   c.last = q.kind; c.n++;
   const R = S.round;
   S.phase = "cx"; S.locked = false;
-  const progress = `<p class="sub">${"●".repeat(c.streak)}${"○".repeat(CX_GOAL - c.streak)} in a row</p>`;
+  const progress = `<p class="sub">${"●".repeat(c.streak)}${"○".repeat(Math.max(0, c.goal - c.streak))} in a row</p>`;
   if (q.kind === "pick") {
     R.opts = shuffle(c.set.slice());
     card(`<p class="q">look closer · which one means…</p><p class="verdict"><b>${K[q.target][0]}</b></p>
@@ -1687,7 +1758,7 @@ function answerCx(i) {
     c.streak++;
     btn.classList.add("right");
     $("check").innerHTML = `✓ ${q.kind === "part" ? `${x}: ${D.parts[x] || (K[x] ? K[x][0] : "")}` : `${q.target} ${K[q.target][0]}`}${whyHTML(q.target)}`;
-    setTimeout(cxNext, 1300);
+    proceed(cxNext);
     return;
   }
   c.streak = 0;
@@ -1707,11 +1778,11 @@ function answerCx(i) {
 }
 function cxDone() {
   const c = S.cx;
-  record({ step: "contrast_done", k: c.k, set: c.set, asked: c.n, got: c.streak >= CX_GOAL });
+  record({ step: "contrast_done", k: c.k, set: c.set, asked: c.n, got: c.streak >= c.goal });
   S.phase = "cxdone";
   card(`
     <p class="q">look closer</p>
-    <p class="verdict">${c.streak >= CX_GOAL ? `✓ You tell them apart now.` : `That's enough for now: they'll come back.`}</p>
+    <p class="verdict">${c.streak >= c.goal ? `✓ You tell them apart now.` : `That's enough for now: they'll come back.`}</p>
     ${groupHTML(c.set, c.k)}
     <button class="next" type="button" id="cont" data-focus>Continue</button>`);
   $("cont").addEventListener("click", cxFinish);
@@ -1786,10 +1857,6 @@ function continueReview() {
 function requeueIfMissed(R) {
   const t = R.tiles[R.i];
   if (t.missed && !t.retry) R.tiles.splice(Math.min(R.tiles.length, R.i + 4), 0, { k: t.k, f: t.f, retry: true });
-}
-
-function bumpBest() {
-  if (S.streak > S.best) { S.best = S.streak; store.set("best", S.best); }
 }
 
 // ======================= today's plan: reviews on time, contrast right after a mix-up, anchor words, then new kanji
@@ -2000,6 +2067,16 @@ document.addEventListener("keydown", e => {
   if (S.phase === "cxfb" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); cxNext(); return; }
   if (S.phase === "cxdone" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); cxFinish(); return; }
   if (S.phase === "lrev" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerLookRev(+e.key - 1); return; }
+  if (S.phase === "okwait") {
+    // the Enter that submitted a typed answer must not also skip its feedback
+    if ((e.key === "Enter" || e.key === " ") && Date.now() - S.okAt > 350) { e.preventDefault(); okContinue(); }
+    else if (e.key === "Escape") goHome();
+    return;
+  }
+  if (S.phase === "conf") {
+    if (e.key === "1" || e.key === "2") { e.preventDefault(); answerConf(e.key === "1" ? "sure" : "unsure"); }
+    return;
+  }
   if (S.phase === "review" && e.key === "r" && S.overrule) { e.preventDefault(); S.overrule(); return; }
   if (S.phase === "review" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueReview(); return; }
   // a quick second Enter from the last feedback screen shouldn't skip past the summary
@@ -2015,13 +2092,14 @@ document.addEventListener("keydown", e => {
   if (S.phase === "parts" && /^[1-9]$/.test(e.key)) { e.preventDefault(); togglePart(+e.key - 1); return; }
   if (S.phase === "parts" && e.key === "Enter") { e.preventDefault(); checkParts(); return; }
   if (S.phase === "soundpart" && /^[1-9]$/.test(e.key)) { e.preventDefault(); answerSoundPart(+e.key - 1); return; }
+  if (S.phase === "lfirst" && /^[1-9]$/.test(e.key)) { e.preventDefault(); answerLookFirst(+e.key - 1); return; }
   if (S.phase === "spot" && /^[1-9]$/.test(e.key)) { e.preventDefault(); answerSpot(+e.key - 1); return; }
   if (S.phase === "banchor" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerAnchor(+e.key - 1); return; }
   if (S.phase === "bteach" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueAnchor(); return; }
   if (S.phase === "breading" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerBuildReading(+e.key - 1); return; }
   if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (["meaning", "parts", "spot", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick", "cx", "cxfb", "cxdone"].includes(S.phase)) {
+  } else if (["meaning", "parts", "spot", "lfirst", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick", "cx", "cxfb", "cxdone"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });

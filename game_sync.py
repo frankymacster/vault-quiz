@@ -15,6 +15,11 @@ to the vault's .quiz_state.json with the quiz's own rules:
     where a kanji is studied and then tested: that test starts it, as in
     the quiz; kanji tagged known that you miss are reported, not un-tagged.
 
+A right answer the player marked "not sure" counts as a hard review (grade 2:
+a shorter next interval) rather than a good one. Every wrong pick is also
+tallied in .game_confusions.json ({kanji: {pick: n}}), which the game uses to
+look first at pairs that have been mixed up twice.
+
 Words mode answers go to the vocabulary schedule (.vocab_state.json, the
 quiz's --vocab mode): a word is right when both its reading and its meaning
 are (in Build, a kanji's anchor word is asked for its reading only). A new word is studied in the game before it's tested, so its first test
@@ -35,6 +40,8 @@ vault, src = sys.argv[1], sys.argv[2]
 q.use_vault(vault)
 kanji, vocab = q.build()
 state = q.load_state()
+cpath = os.path.join(q.VAULT, ".game_confusions.json")
+confusions = json.load(open(cpath, encoding="utf-8")) if os.path.exists(cpath) else {}
 vpath = os.path.join(q.VAULT, q.VOCAB_STATE_FILE)
 vstate = q.load_state(vpath)
 done_path = os.path.join(q.VAULT, ".game_import.json")
@@ -84,6 +91,9 @@ for e, sid in new:
     if e.get("step") != "meaning" or e.get("k") not in kanji:
         continue
     k, ok = e["k"], e["ok"]
+    if not ok and e.get("picked") in kanji and e["picked"] != k:
+        confusions.setdefault(k, {})
+        confusions[k][e["picked"]] = confusions[k].get(e["picked"], 0) + 1
     # a pick that shares a part with the kanji (or is one: 然/燃) is a confusion observed:
     # both notes list it under Lookalikes
     other = e.get("picked")
@@ -112,7 +122,7 @@ for e, sid in new:
         q.schedule(card, 1)
         lapses.append(k)
     elif card.get("due", 0) <= day:
-        q.schedule(card, 3)
+        q.schedule(card, 2 if e.get("conf") == "unsure" else 3)
         reviews.append(k)
         if card["ivl"] >= q.MATURE:
             q.mark_known(kanji[k])
@@ -122,6 +132,7 @@ for e, sid in new:
 q.today = real_today
 
 q.save_state(state)
+json.dump(confusions, open(cpath, "w", encoding="utf-8"), ensure_ascii=False, indent=1, sort_keys=True)
 if w_started or w_lapses or w_reviews:
     q.save_state(vstate, vpath)
 json.dump(done, open(done_path, "w", encoding="utf-8"), indent=1, sort_keys=True)
