@@ -16,6 +16,7 @@ sys.path.insert(0, HERE)
 import quiz as q
 import sound_families
 import word_align
+import build_kanji_vault as bk
 
 q.use_vault(sys.argv[1])
 kanji, vocab = q.build()
@@ -162,6 +163,83 @@ if "sound" in data:
     mcount = collections.Counter(c for k, r in roles.items() if "s" in r.values()
                                  for c, role in r.items() if role == "m")
     data["meaningRadicals"] = [[c, data["parts"].get(c, "")] for c, _ in mcount.most_common(24)]
+# parts the IDS dictionary has no character for (it writes them (1)..(20)) were dropped from the notes: add each as a
+# cut-out of its kanji, placed by the layout the dictionary gives (left half, top, inside a frame...)
+ids_path = os.path.join(os.path.dirname(HERE), ".jkgv_cache", "ids.txt")
+data["frag"] = {}
+if os.path.exists(ids_path):
+    ids = bk.load_ids(ids_path)
+    OPS3 = set("⿲⿳")
+
+    def parse(seq, i=0):
+        c = seq[i]
+        if c in bk.IDC:
+            kids, j = [], i + 1
+            for _ in range(3 if c in OPS3 else 2):
+                node, j = parse(seq, j)
+                kids.append(node)
+            return (c, kids), j
+        if c == "&":
+            j = seq.index(";", i) + 1
+            return (seq[i:j], None), j
+        return (c, None), i + 1
+
+    def children(op, bb, poly):
+        x0, y0, x1, y1 = bb
+        w, h = x1 - x0, y1 - y0
+        P = lambda a, b: (x0 + a * w, y0 + b * h)
+        box = lambda a, b, c, d: (x0 + a * w, y0 + b * h, x0 + c * w, y0 + d * h)
+        ring = lambda bx: [(bx[0], bx[1]), (bx[2], bx[1]), (bx[2], bx[3]), (bx[0], bx[3])]
+        if op in ("⿰", "⿲"):
+            n = 3 if op == "⿲" else 2
+            return [(b, ring(b)) for b in (box(i / n, 0, (i + 1) / n, 1) for i in range(n))]
+        if op in ("⿱", "⿳"):
+            n = 3 if op == "⿳" else 2
+            return [(b, ring(b)) for b in (box(0, i / n, 1, (i + 1) / n) for i in range(n))]
+        if op == "⿻":
+            return [(bb, poly), (bb, poly)]
+        inner, outer = {
+            "⿴": (box(.2, .2, .8, .8), poly),
+            "⿵": (box(.2, .3, .8, 1), [P(0, 0), P(1, 0), P(1, 1), P(.8, 1), P(.8, .3), P(.2, .3), P(.2, 1), P(0, 1)]),
+            "⿶": (box(.2, 0, .8, .7), [P(0, 1), P(0, 0), P(.2, 0), P(.2, .7), P(.8, .7), P(.8, 0), P(1, 0), P(1, 1)]),
+            "⿷": (box(.3, .2, 1, .8), [P(0, 0), P(1, 0), P(1, .2), P(.3, .2), P(.3, .8), P(1, .8), P(1, 1), P(0, 1)]),
+            "⿸": (box(.35, .35, 1, 1), [P(0, 0), P(1, 0), P(1, .35), P(.35, .35), P(.35, 1), P(0, 1)]),
+            "⿹": (box(0, .35, .65, 1), [P(0, 0), P(1, 0), P(1, 1), P(.65, 1), P(.65, .35), P(0, .35)]),
+            "⿺": (box(.35, 0, 1, .65), [P(0, 0), P(.35, 0), P(.35, .65), P(1, .65), P(1, 1), P(0, 1)]),
+        }[op]
+        return [(bb, outer), (inner, ring(inner))]
+
+    def walk(node, bb, poly, frame, out):
+        op, kids = node
+        if kids is None:
+            if op in bk.UNREPRESENTABLE:
+                out.append((poly, bb, frame))
+            return
+        for kid, (kbb, kpoly) in zip(kids, children(op, bb, poly)):
+            walk(kid, kbb, kpoly, frame or (op in "⿴⿵⿶⿷⿸⿹⿺" and kid is kids[0]), out)
+
+    def where(bb, frame):
+        if frame:
+            return "outer part"
+        cx, cy = (bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2
+        h = "left" if cx < .4 else "right" if cx > .6 else ""
+        v = "top" if cy < .4 else "bottom" if cy > .6 else ""
+        return "-".join(x for x in (v, h) if x) or "middle"
+
+    for k in pool:
+        seq = ids.get(k)
+        if not seq:
+            continue
+        node, _ = parse(re.sub(r"&[^;]+;", "", seq))
+        found = []
+        walk(node, (0, 0, 1, 1), [(0, 0), (1, 0), (1, 1), (0, 1)], False, found)
+        for n, (poly, bb, frame) in enumerate(found):
+            pid = "◌" + k + (str(n + 1) if len(found) > 1 else "")
+            clip = "polygon(" + ", ".join("%.0f%% %.0f%%" % (x * 100, y * 100) for x, y in poly) + ")"
+            data["frag"][pid] = {"k": k, "clip": clip}
+            data["parts"][pid] = "shape with no character: %s" % where(bb, frame)
+            data["kanji"][k][3] = data["kanji"][k][3] + [pid]
+    print("%d parts without a character added to %d kanji" % (len(data["frag"]), len({v["k"] for v in data["frag"].values()})))
 blob = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 assert "</script" not in blob
 tpl = sys.argv[3] if len(sys.argv) > 3 else "family_tree_template.html"

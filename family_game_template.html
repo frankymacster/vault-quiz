@@ -66,6 +66,28 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .spotlit .dim { opacity: .22; transition: opacity .4s; }
 .spotlit .hl { color: var(--indigo); text-decoration: underline; text-decoration-thickness: 3px; text-underline-offset: 8px; }
 .verdict.mk { font-size: 1.4rem; }
+/* a kanji's blink comparator: the two overlaid and alternating, so what differs flashes and what is shared holds still */
+.hold { display: grid; gap: 18px; justify-items: center; width: 100%; }
+.blink { position: relative; width: 1.25em; height: 1.2em; margin: 0 auto; font-family: var(--glyph); font-weight: 700; font-size: clamp(3rem, 16vw, 5rem); line-height: 1; animation: blinkbox 2.4s both; }
+.blink span { position: absolute; inset: 0; display: grid; place-items: center; }
+.blink .ba { animation: ba .9s ease-in-out .5s 2 both; }
+.blink .bb { opacity: 0; animation: bb .9s ease-in-out .5s 2 both; }
+@keyframes blinkbox { 0% { opacity: 0; } 15%, 85% { opacity: 1; } 99% { opacity: 0; height: 1.2em; } 100% { opacity: 0; height: 0; } }
+@keyframes ba { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes bb { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+.stage-hold { opacity: 0; visibility: hidden; animation: reveal .4s ease-out 2.3s forwards; }
+.stage-hold.go { animation: none; opacity: 1; visibility: visible; }
+@keyframes reveal { from { opacity: 0; visibility: hidden; } to { opacity: 1; visibility: visible; } }
+/* after a mistake the grid stays and says what was right */
+.ptile.right { border-color: var(--good); background: var(--good-bg); }
+.ptile.wrong { border-color: var(--bad); background: var(--bad-bg); }
+.ptile.right[aria-pressed=true] { box-shadow: 0 0 0 2px var(--good); }
+.ptile.wrong[aria-pressed=true] { box-shadow: 0 0 0 2px var(--bad); }
+.choice.missed, .ptile.missed { border-style: dashed; animation: pingGood 1s ease-out .25s 2; }
+.choice.faded, .ptile.faded { opacity: .38; }
+@keyframes pingGood { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); } 70% { box-shadow: 0 0 0 10px transparent; } 100% { box-shadow: none; } }
+/* a part with no character of its own: the shape, cut out of the kanji it belongs to */
+.frag { display: inline-block; width: 1em; height: 1em; line-height: 1; text-align: center; }
 .recap { display: grid; gap: 6px; width: 100%; text-align: left; }
 .recap-row { padding: 8px 12px; border-left: 3px solid var(--indigo); background: var(--sheet); border-radius: 8px; font-size: .9rem; }
 .recap-row .g { font-family: var(--glyph); font-weight: 700; font-size: 1.2rem; margin-right: 6px; }
@@ -203,7 +225,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
 .enter { animation: rise .2s ease-out; }
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (max-width: 480px) { .glyph { font-size: 4.8rem; } h1 { font-size: 1.5rem; } }
-@media (prefers-reduced-motion: reduce) { .enter, .step.fail, .shake, .part.diff, .parts .part.build, .crow.built .cg { animation: none; } .spotlit .dim { transition: none; } .track i { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .enter, .step.fail, .shake, .part.diff, .parts .part.build, .crow.built .cg { animation: none; } .spotlit .dim { transition: none; } .blink { display: none; } .stage-hold { animation: none; opacity: 1; visibility: visible; } .choice.missed, .ptile.missed { animation: none; } .track i { transition: none; } }
 </style>
 
 <div class="wrap">
@@ -254,6 +276,11 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
 <script>
 const D = JSON.parse(document.getElementById("data").textContent);
 const F = D.families, K = D.kanji, LV = D.levels;
+// parts with no character of their own (D.frag) are drawn as a cut-out of the kanji they belong to
+const FRAG = D.frag || {};
+const pg = c => FRAG[c] ? `<span class="frag" style="clip-path:${FRAG[c].clip}">${FRAG[c].k}</span>` : c;
+const REDUCED = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+const holdCls = () => REDUCED ? "" : " stage-hold";
 const $ = id => document.getElementById(id);
 
 const store = {
@@ -442,6 +469,7 @@ function show(view) {
   $("play").hidden = view !== "play";
 }
 function card(html) {
+  S.stageUntil = S.stageNext || 0; S.stageNext = 0;
   const c = $("card");
   c.innerHTML = `<div class="step enter${html.includes('class="no"') ? " fail" : ""}">${html}</div>`;
   const first = c.querySelector("[data-focus]");
@@ -460,6 +488,40 @@ function okContinue() {
   const f = S.afterOk;
   S.afterOk = null; S.phase = null;
   f();
+}
+// both kanji first, then a blink comparator; the choices appear after it (Enter skips)
+function blinkStage(a, b, all) {
+  const row = `<div class="lglyphs">${(all || [a, b]).map(x => `<span class="${x === a ? "on" : ""}">${x}</span>`).join("")}</div>`;
+  if (REDUCED) return row;
+  S.stageNext = Date.now() + 2400;
+  return `${row}<div class="blink" aria-hidden="true"><span class="ba">${a}</span><span class="bb">${b}</span></div>`;
+}
+function endStage() { S.stageUntil = 0; document.querySelectorAll(".stage-hold").forEach(el => el.classList.add("go")); }
+// after a mistake the grid stays and says what was right: green for the right ones (a dashed pulse on those you
+// missed), red for wrong picks, the rest fade
+function markGrid(sel, opts, right, picked) {
+  const els = document.querySelectorAll(sel);
+  opts.forEach((c, i) => {
+    const el = els[i];
+    if (!el) return;
+    const isRight = right.includes(c), was = picked.includes(c);
+    el.classList.remove("picked");
+    if (isRight) { el.classList.add("right"); if (!was) el.classList.add("missed"); }
+    else if (was) { el.classList.add("wrong"); shake(el); }
+    else el.classList.add("faded");
+  });
+}
+function revealChoice(idx) {
+  const el = document.querySelectorAll(".choice")[idx];
+  if (el) { el.classList.add("right"); el.classList.add("missed"); }
+}
+function failGrid(sel, opts, right, picked, noteHtml, after) {
+  markGrid(sel, opts, right, picked);
+  const cb = $("check-parts"); if (cb) cb.style.display = "none";
+  const box = document.querySelector("#card .step");
+  if (box) { box.classList.add("fail"); if (box.insertAdjacentHTML) box.insertAdjacentHTML("beforeend", `${noteHtml}<button class="next" type="button" id="cont" data-focus>Continue</button>`); }
+  S.phase = "review"; S.afterReview = after;
+  const b = $("cont"); if (b) { b.addEventListener("click", continueReview); if (b.focus) b.focus(); }
 }
 function shake(el) {
   if (!el || !el.classList) return;
@@ -511,7 +573,7 @@ function meaningStep() {
     <p class="q">which one means…</p>
     <p class="verdict"><b>${K[k][0]}</b></p>
     <div class="choices fam" role="group" aria-label="Kanji">
-      ${R.opts.map((o, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${o.k}</span></button>`).join("")}
+      ${R.opts.map((o, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${pg(o.k)}</span></button>`).join("")}
     </div>
     <p class="hint">they share a part: find the one that differs</p>
     <p class="check" id="check"></p>`);
@@ -586,6 +648,7 @@ function settleMeaning(i, conf) {
     R.tiles[R.i].missed = true; S.partsOk[k] = 0; store.set("partsOk", S.partsOk);
     const btn = document.querySelectorAll(".choice")[i];
     btn.classList.remove("picked"); btn.classList.add("wrong"); shake(btn);
+    revealChoice(R.opts.findIndex(o => o.k === k));
     const sure = conf === "sure";
     const lead = (sure ? "You were sure, so this is the pair worth fixing. " : "") +
       (R.rev ? `<b>${right}</b> is ${k}; ${other} means ${K[other][0]}.` : `${k} means <b>${right}</b>; you picked the meaning of ${other}.`);
@@ -598,7 +661,7 @@ function settleMeaning(i, conf) {
 function partChip(x, c, cls) {
   const role = (D.roles && D.roles[x] || {})[c];
   const tag = role === "s" ? `sound ${D.partOn && D.partOn[c] ? D.partOn[c] : ""}` : role === "m" ? "meaning" : "";
-  return `<span class="part ${cls}${role === "s" ? " snd" : ""}"><span class="pg">${c}</span>${D.parts[c] || ""}${tag ? ` <span class="role">${tag}</span>` : ""}</span>`;
+  return `<span class="part ${cls}${role === "s" ? " snd" : ""}"><span class="pg">${pg(c)}</span>${D.parts[c] || ""}${tag ? ` <span class="role">${tag}</span>` : ""}</span>`;
 }
 function partsRow(k, cls, label) {
   return `<div class="compare"><div class="crow built ${cls}"><span class="cg">${k}</span><span class="cm"><b>${label}</b>${K[k][0]}</span>
@@ -778,7 +841,7 @@ function partOptions(k) {
   const near = new Set();
   for (const c of mine) for (const sib of (partUsers[c] || []).slice(0, 40)) for (const p of K[sib][3]) near.add(p);
   if (famOf[k]) for (const sib of F[famOf[k]].k) for (const p of (K[sib][3] || [])) near.add(p);
-  const decoys = shuffle([...near].filter(p => !mine.includes(p) && D.parts[p] !== undefined));
+  const decoys = shuffle([...near].filter(p => !mine.includes(p) && D.parts[p] !== undefined && !FRAG[p]));
   const fill = shuffle(ALL_PARTS.filter(p => !mine.includes(p) && !decoys.includes(p)));
   const want = Math.max(6, Math.min(8, mine.length + 5));
   return shuffle(mine.concat(decoys.slice(0, want - mine.length - 1), fill).slice(0, want));
@@ -793,7 +856,7 @@ function partsStep() {
     <div class="glyph">${k}</div>
     <p class="hint">${kStatus(k) === "new" && !R.tiles[R.i].fresh ? `new to you: ${K[k][0]}` : ""}</p>
     <div class="pgrid" role="group" aria-label="Parts">
-      ${R.opts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${c}</span><span class="pm">${D.parts[c] || ""}</span></button>`).join("")}
+      ${R.opts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${pg(c)}</span><span class="pm">${D.parts[c] || ""}</span></button>`).join("")}
     </div>
     <button class="next" type="button" id="check-parts">Check</button>
     <p class="sub">tap or press 1–${R.opts.length}, then Enter</p>`);
@@ -822,16 +885,8 @@ function checkParts() {
       ${partsRow(k, "right", "built from")}<p class="check">✓</p>`);
     proceed(buildAdvance);
   } else {
-    const missed = mine.filter(c => !picked.includes(c)), extra = picked.filter(c => !mine.includes(c));
-    S.phase = "review";
-    card(`
-      <p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> is built from ${mine.map(c => `<span class="g">${c}</span>`).join(" + ")}</p>
-      <div class="compare"><div class="crow right"><span class="cg">${k}</span><span class="cm"><b>its parts</b>${kStatus(k) === "new" && !R.tiles[R.i].fresh ? K[k][0] : ""}</span>
-        <span class="parts">${mine.map(c => partChip(k, c, missed.includes(c) ? "missed" : "")).join("")}${extra.map(c => `<span class="part extra"><span class="pg">${c}</span>${D.parts[c] || ""}</span>`).join("")}</span></div></div>
-      <p class="sub">${missed.length ? `green: the part${missed.length > 1 ? "s" : ""} you missed` : ""}${missed.length && extra.length ? " · " : ""}${extra.length ? "struck out: not in it" : ""}</p>
-      <button class="next" type="button" id="cont" data-focus>Continue</button>`);
-    S.afterReview = buildAdvance;
-    $("cont").addEventListener("click", continueReview);
+    failGrid(".ptile", R.opts, mine, picked, `<p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> is built from ${mine.map(c => `<span class="g">${pg(c)}</span>`).join(" + ")}</p>
+      ${partsRow(k, "", "its parts")}<p class="sub">green: right · dashed and pulsing: you missed it · red: not in it</p>`, buildAdvance);
   }
 }
 
@@ -851,9 +906,9 @@ function lookFirst(k, x) {
   renderBar();
   card(`
     <p class="q">you've mixed these up before: what makes <span class="g">${k}</span> different from <span class="g">${x}</span>?</p>
-    <div class="lglyphs"><span class="on">${k}</span><span>${x}</span></div>
-    <div class="choices fam" role="group" aria-label="Parts">
-      ${R.opts.map((c, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${c}</span><span class="m">${D.parts[c] || (K[c] ? K[c][0] : "")}</span></button>`).join("")}
+    ${blinkStage(k, x)}
+    <div class="choices fam${holdCls()}" role="group" aria-label="Parts">
+      ${R.opts.map((c, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${pg(c)}</span><span class="m">${D.parts[c] || (K[c] ? K[c][0] : "")}</span></button>`).join("")}
     </div>
     <p class="check" id="check"></p>
     <p class="sub">look first: the meaning question comes next</p>`);
@@ -866,8 +921,7 @@ function answerLookFirst(i) {
   const c = R.opts[i], ok = R.right.includes(c), btns = document.querySelectorAll(".choice");
   record({ step: "look_first", k, rival: x, right: R.right, picked: c, ok });
   if (ok) S.recap.push([k, x]);
-  if (!ok) { btns[i].classList.add("wrong"); shake(btns[i]); R.opts.forEach((o, j) => { if (R.right.includes(o)) btns[j].classList.add("right"); }); }
-  else btns[i].classList.add("right");
+  if (!ok) markGrid(".choice", R.opts, R.right, [c]); else btns[i].classList.add("right");
   $("check").innerHTML = `${ok ? "✓" : "✗"} ${k} has ${R.right.map(o => `${o} ${D.parts[o] || (K[o] ? K[o][0] : "")}`).join(" + ")}; ${x} doesn't.`;
   proceed(meaningStep);
 }
@@ -878,9 +932,9 @@ function spotStep() {
   renderBar();
   card(`
     <p class="q">what makes <span class="g">${k}</span> different from <span class="g">${x}</span>?</p>
-    <div class="lglyphs"><span class="on">${k}</span><span>${x}</span></div>
-    <div class="choices fam" role="group" aria-label="Parts">
-      ${R.opts.map((c, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${c}</span><span class="m">${D.parts[c] || (K[c] ? K[c][0] : "")}</span></button>`).join("")}
+    ${blinkStage(k, x)}
+    <div class="choices fam${holdCls()}" role="group" aria-label="Parts">
+      ${R.opts.map((c, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${pg(c)}</span><span class="m">${D.parts[c] || (K[c] ? K[c][0] : "")}</span></button>`).join("")}
     </div>
     <p class="check" id="check"></p>
     <p class="sub">you've built ${k} before: just the part that tells it apart</p>`);
@@ -902,7 +956,7 @@ function answerSpot(i) {
   }
   // the quick version missed: back to the full grid next time, and a closer look now
   S.partsOk[t.k] = 0; store.set("partsOk", S.partsOk);
-  btn.classList.add("wrong"); shake(btn);
+  markGrid(".choice", R.opts, R.right, [c]);
   setTimeout(() => startContrast(t.k, [t.rival], buildAdvance, 0,
     `${t.k} has ${R.right.join(" + ")}; ${c} is ${ownParts(t.rival).includes(c) ? "in " + t.rival + " too" : "in neither"}.`), 700);
 }
@@ -918,7 +972,7 @@ function soundPartStep() {
     <div class="glyph">${k}</div>
     <p class="hint"><span class="radtag">h: show which parts are meaning parts</span></p>
     <div class="choices fam" role="group" aria-label="Parts">
-      ${R.opts.map((c, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${c}</span><span class="m">${D.parts[c] || ""}${D.partOn && D.partOn[c] ? " · " + D.partOn[c] : ""}</span></button>`).join("")}
+      ${R.opts.map((c, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${pg(c)}</span><span class="m">${D.parts[c] || ""}${D.partOn && D.partOn[c] ? " · " + D.partOn[c] : ""}</span></button>`).join("")}
     </div>
     <p class="check" id="check"></p>`);
   document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerSoundPart(+b.dataset.i)));
@@ -1499,12 +1553,13 @@ function lookPick(t) {
   card(`
     <p class="q">${t.kind === "shared" ? "what do they share?" : `what does ${t.k} have that ${others.join(" ")} ${others.length > 1 ? "don't" : "doesn't"}?`}
       <span style="text-transform:none;letter-spacing:0">(pick all of them)</span></p>
-    <div class="lglyphs">${t.g.map(x => `<span class="${t.kind === "diff" && x === t.k ? "on" : ""}">${x}</span>`).join("")}</div>
+    ${t.kind === "diff" ? blinkStage(t.k, others[0], t.g) : `<div class="lglyphs">${t.g.map(x => `<span>${x}</span>`).join("")}</div>`}
+    <div class="hold${t.kind === "diff" ? holdCls() : ""}">
     <div class="pgrid" role="group" aria-label="Parts">
-      ${R.opts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${c}</span><span class="pm">${D.parts[c] || (K[c] ? K[c][0] : "")}</span></button>`).join("")}
+      ${R.opts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${pg(c)}</span><span class="pm">${D.parts[c] || (K[c] ? K[c][0] : "")}</span></button>`).join("")}
     </div>
     <button class="next" type="button" id="check-parts">Check</button>
-    <p class="sub">tap or press 1–${R.opts.length}, then Enter</p>`);
+    <p class="sub">tap or press 1–${R.opts.length}, then Enter</p></div>`);
   document.querySelectorAll(".ptile").forEach(b => b.addEventListener("click", () => toggleLookPart(+b.dataset.i)));
   $("check-parts").addEventListener("click", checkLookPick);
 }
@@ -1526,9 +1581,13 @@ function checkLookPick() {
   const what = t.kind === "shared"
     ? `They share ${R.right.map(c => `<span class="g">${c}</span>`).join(" + ")}`
     : `<span class="g">${t.k}</span> adds ${R.right.map(c => `<span class="g">${c}</span> ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}`;
+  if (!ok) {
+    return failGrid(".ptile", R.opts, R.right, picked, `<p class="verdict"><span class="no">✗</span> ${what}.${picked.length ? ` You picked ${picked.map(c => `<span class="g">${pg(c)}</span>`).join(" ")}.` : ""}</p>
+      ${groupHTML(t.g, t.kind === "diff" ? t.k : null)}`, lookAdvance);
+  }
   S.phase = "review";
   card(`
-    <p class="verdict">${ok ? "✓" : `<span class="no">✗</span>`} ${what}.${ok ? "" : ` You picked ${picked.map(c => `<span class="g">${c}</span>`).join(" ") || "nothing"}.`}</p>
+    <p class="verdict">✓ ${what}.</p>
     ${groupHTML(t.g, t.kind === "diff" ? t.k : null)}
     <button class="next" type="button" id="cont" data-focus>Continue</button>`);
   S.afterReview = lookAdvance;
@@ -1641,7 +1700,7 @@ function lookRev(t) {
     <p class="q">which one means…</p>
     <p class="verdict"><b>${K[t.k][0]}</b></p>
     <div class="choices fam" role="group" aria-label="Kanji">
-      ${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${x}</span></button>`).join("")}
+      ${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${pg(x)}</span></button>`).join("")}
     </div>
     <div id="lmiss"></div>
     <p class="check" id="check"></p>`);
@@ -1661,7 +1720,7 @@ function answerLookRev(i) {
     return;
   }
   t.missed = true;
-  btn.classList.add("wrong"); shake(btn);
+  btn.classList.add("wrong"); shake(btn); revealChoice(R.opts.indexOf(t.k));
   setTimeout(() => startContrast(t.k, [picked, ...t.g.filter(x => x !== t.k && x !== picked)], lookAdvance, 0,
     `<b>${K[t.k][0]}</b> is ${t.k}; you picked ${picked}, ${K[picked][0]}.`), 700);
 }
@@ -1759,7 +1818,7 @@ function cxNext() {
   if (q.kind === "pick") {
     R.opts = shuffle(c.set.slice());
     card(`<p class="q">look closer · which one means…</p><p class="verdict"><b>${K[q.target][0]}</b></p>
-      <div class="choices fam">${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${x}</span></button>`).join("")}</div>
+      <div class="choices fam">${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${pg(x)}</span></button>`).join("")}</div>
       <p class="check" id="check"></p>${progress}`);
   } else if (q.kind === "mean") {
     R.opts = shuffle(c.set.slice());
@@ -1770,9 +1829,10 @@ function cxNext() {
     const pool = new Set(c.set.flatMap(ownParts));
     groupParts(c.set).shared.forEach(x => pool.add(x));
     R.opts = shuffle([...pool].filter(x => !c.set.includes(x) || groupParts([q.target, q.other]).diff[q.target].includes(x))).slice(0, 8);
+    const staged = !c.blinked; c.blinked = true;
     card(`<p class="q">look closer · what does <span class="g">${q.target}</span> have that <span class="g">${q.other}</span> doesn't?</p>
-      <div class="lglyphs"><span class="on">${q.target}</span><span>${q.other}</span></div>
-      <div class="choices fam">${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${x}</span><span class="m">${D.parts[x] || (K[x] ? K[x][0] : "")}</span></button>`).join("")}</div>
+      ${staged ? blinkStage(q.target, q.other) : `<div class="lglyphs"><span class="on">${q.target}</span><span>${q.other}</span></div>`}
+      <div class="choices fam${staged ? holdCls() : ""}">${R.opts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${pg(x)}</span><span class="m">${D.parts[x] || (K[x] ? K[x][0] : "")}</span></button>`).join("")}</div>
       <p class="check" id="check"></p>${progress}`);
   }
   document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerCx(+b.dataset.i)));
@@ -1793,7 +1853,8 @@ function answerCx(i) {
     return;
   }
   c.streak = 0;
-  btn.classList.add("wrong"); shake(btn);
+  if (q.kind === "part") markGrid(".choice", R.opts, groupParts([q.target, q.other]).diff[q.target], [x]);
+  else { btn.classList.add("wrong"); shake(btn); revealChoice(R.opts.indexOf(q.target)); }
   const wrongOne = q.kind === "part" ? q.other : x;
   S.phase = "cxfb";
   $("check").innerHTML = "";
@@ -1873,7 +1934,7 @@ function answerBd(i) {
   const k = b.ask[b.i], o = b.opts[i], ok = o.k === k, btn = document.querySelectorAll(".choice")[i];
   record({ step: "word_kanji", w: b.w, k, picked: o.k, ok });
   b.ok.push(ok);
-  if (ok) btn.classList.add("right"); else { btn.classList.add("wrong"); shake(btn); }
+  if (ok) btn.classList.add("right"); else { btn.classList.add("wrong"); shake(btn); revealChoice(b.opts.findIndex(o => o.k === k)); }
   $("check").innerHTML = ok ? `✓ ${k} ${K[k][0]}` : `<span class="no">✗</span> ${k} means ${K[k][0]}; “${o.g}” is ${o.k}`;
   proceed(() => { b.i++; b.i < b.ask.length ? bdKanjiStep() : bdParts(); });
 }
@@ -1887,7 +1948,7 @@ function bdParts() {
     <p class="q">which parts is <span class="g">${k}</span> made of? <span style="text-transform:none;letter-spacing:0">(pick all of them)</span></p>
     <div class="glyph">${k}</div>
     <div class="pgrid" role="group" aria-label="Parts">
-      ${b.popts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${c}</span><span class="pm">${D.parts[c] || ""}</span></button>`).join("")}
+      ${b.popts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${pg(c)}</span><span class="pm">${D.parts[c] || ""}</span></button>`).join("")}
     </div>
     <button class="next" type="button" id="check-parts">Check</button>
     <p class="sub">tap or press 1–${b.popts.length}, then Enter</p>`);
@@ -1908,8 +1969,8 @@ function checkBdParts() {
   const k = b.pk, mine = K[k][3], picked = [...b.sel].map(i => b.popts[i]);
   const ok = picked.length === mine.length && mine.every(c => picked.includes(c));
   record({ step: "word_parts", w: b.w, k, right: mine, picked, ok });
-  card(ok ? `<p class="q">which parts is it made of?</p>${partsRow(k, "right", "built from")}<p class="check">✓</p>`
-          : `<p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> is built from ${mine.map(c => `<span class="g">${c}</span>`).join(" + ")}</p>${partsRow(k, "", "built from")}`);
+  if (!ok) return failGrid(".ptile", b.popts, mine, picked, `<p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> is built from ${mine.map(c => `<span class="g">${pg(c)}</span>`).join(" + ")}</p>${partsRow(k, "", "built from")}`, bdDone);
+  card(`<p class="q">which parts is it made of?</p>${partsRow(k, "right", "built from")}<p class="check">✓</p>`);
   proceed(bdDone);
 }
 // ...and the word, put back together from what you just recalled
@@ -1928,7 +1989,7 @@ function bdDone() {
 // ======================= make it: a kanji you know well, asked backwards: meaning -> its parts -> which kanji
 function makeWanted(k, tile) {
   const c = kCard(k);
-  if (tile.fresh || tile.retry || !c || c.ivl < 6 || (S.partsOk[k] || 0) < 2 || ownParts(k).length < 2) return false;
+  if (tile.fresh || tile.retry || !c || c.ivl < 6 || (S.partsOk[k] || 0) < 2 || ownParts(k).length < 2 || ownParts(k).some(p => FRAG[p])) return false;
   return rivals(k).length >= 2 && Math.random() < .35;
 }
 function makeStep() {
@@ -1940,7 +2001,7 @@ function makeStep() {
     <p class="q">which parts make the kanji for…</p>
     <p class="verdict mk"><b>${K[k][0]}</b></p>
     <div class="pgrid" role="group" aria-label="Parts">
-      ${R.opts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${c}</span><span class="pm">${D.parts[c] || ""}</span></button>`).join("")}
+      ${R.opts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${pg(c)}</span><span class="pm">${D.parts[c] || ""}</span></button>`).join("")}
     </div>
     <button class="next" type="button" id="check-parts">Check</button>
     <p class="sub">pick every part, then Enter: the kanji comes next</p>`);
@@ -1964,10 +2025,9 @@ function checkMakeParts() {
   S.partsOk[k] = ok ? (S.partsOk[k] || 0) + 1 : 0; store.set("partsOk", S.partsOk);
   record({ step: "make_parts", k, right: mine, picked, ok });
   // the next question is about these parts, whether or not you found them all
-  card(`
-    ${ok ? `<p class="q">the parts</p>` : `<p class="verdict"><span class="no">✗</span> the parts are ${mine.map(c => `<span class="g">${c}</span>`).join(" + ")}</p>`}
-    <div class="parts">${mine.map(c => partChip(k, c, "build")).join("")}</div>
-    ${ok ? `<p class="check">✓</p>` : ""}`);
+  if (!ok) return failGrid(".ptile", R.opts, mine, picked, `<p class="verdict"><span class="no">✗</span> the parts are ${mine.map(c => `<span class="g">${pg(c)}</span>`).join(" + ")}</p>
+    <div class="parts">${mine.map(c => partChip(k, c, "build")).join("")}</div>`, makePick);
+  card(`<p class="q">the parts</p><div class="parts">${mine.map(c => partChip(k, c, "build")).join("")}</div><p class="check">✓</p>`);
   proceed(makePick);
 }
 function makePick() {
@@ -1979,7 +2039,7 @@ function makePick() {
     <div class="parts">${K[k][3].map(c => partChip(k, c, "")).join("")}</div>
     <p class="verdict"><b>${K[k][0]}</b></p>
     <div class="choices fam" role="group" aria-label="Kanji">
-      ${R.mopts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${x}</span></button>`).join("")}
+      ${R.mopts.map((x, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="seal">${pg(x)}</span></button>`).join("")}
     </div>
     <p class="check" id="check"></p>`);
   document.querySelectorAll(".choice").forEach(b => b.addEventListener("click", () => answerMake(+b.dataset.i)));
@@ -2000,7 +2060,7 @@ function answerMake(i) {
     proceed(buildAdvance);
   } else {
     t.missed = true; S.partsOk[k] = 0; store.set("partsOk", S.partsOk);
-    btn.classList.add("wrong"); shake(btn);
+    btn.classList.add("wrong"); shake(btn); revealChoice(R.mopts.indexOf(k));
     setTimeout(() => startContrast(k, [other, ...rivals(k).filter(x => x !== other).slice(0, 1)], buildAdvance, 0,
       `<b>${K[k][0]}</b> is ${k}; ${other} means ${K[other][0]}.`), 700);
   }
@@ -2287,6 +2347,10 @@ $("quit").addEventListener("click", goHome);
 
 document.addEventListener("keydown", e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (S.stageUntil && Date.now() < S.stageUntil) {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); endStage(); return; }
+    if (/^[1-9]$/.test(e.key)) return;
+  }
   if (S.phase === "wtype" || S.phase === "ltype") { if (e.key === "Escape") goHome(); return; }
   if (S.phase === "nstudy" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueNewStudy(); return; }
   if (S.phase === "lpick" && /^[1-9]$/.test(e.key)) { e.preventDefault(); toggleLookPart(+e.key - 1); return; }
