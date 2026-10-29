@@ -300,7 +300,27 @@ const D = JSON.parse(document.getElementById("data").textContent);
 const F = D.families, K = D.kanji, LV = D.levels;
 // parts with no character of their own (D.frag) are drawn as a cut-out of the kanji they belong to
 const FRAG = D.frag || {};
-const pg = c => FRAG[c] ? `<span class="frag" style="clip-path:${FRAG[c].clip}">${FRAG[c].k}</span>` : c;
+// rare characters (the dictionary's own parts, beyond CJK extension A) are drawn as a cut-out too when this device's fonts can't draw them
+const drawable = (() => {
+  const memo = new Map();
+  let ctx = null, ref = null;
+  return c => {
+    if (memo.has(c)) return memo.get(c);
+    let ok = true;
+    try {
+      if (!ctx && document.createElement) {
+        const cv = document.createElement("canvas"); cv.width = cv.height = 64; ctx = cv.getContext("2d");
+        const draw = ch => { ctx.clearRect(0, 0, 64, 64); ctx.font = '700 40px "Shippori Mincho","Hiragino Mincho ProN","Yu Mincho",serif'; ctx.fillText(ch, 8, 48); return cv.toDataURL(); };
+        ctx.draw = draw; ref = [draw("\u{10FFFF}"), draw("\u{2FFFF}")];
+      }
+      if (ctx) { const d = ctx.draw(c); ok = !ref.includes(d); }
+    } catch (e) { ok = true; }
+    memo.set(c, ok);
+    return ok;
+  };
+})();
+const isCut = c => FRAG[c] && !(FRAG[c].rare && drawable(c));
+const pg = c => isCut(c) ? `<span class="frag" style="clip-path:${FRAG[c].clip}">${FRAG[c].k}</span>` : c;
 const REDUCED = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 const holdCls = () => REDUCED ? "" : " stage-hold";
 const $ = id => document.getElementById(id);
@@ -571,7 +591,7 @@ function startRound() {
 function whyHTML(k) {
   const roles = (D.roles && D.roles[k]) || {}, parts = ownParts(k);
   if (parts.length < 2) return "";
-  return `<span class="why">${k} = ${parts.map(c => `${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}` +
+  return `<span class="why">${k} = ${parts.map(c => `${pg(c)} ${D.parts[c] || (K[c] ? K[c][0] : "")}` +
     (roles[c] === "s" ? ` (sound ${(SND[c] && SND[c].a[k]) || (D.partOn && D.partOn[c]) || ""})` : "")).join(" + ")}</span>`;
 }
 // kanji it could be mistaken for: your lookalikes first, then started kanji sharing a part with it
@@ -863,7 +883,7 @@ function partOptions(k) {
   const near = new Set();
   for (const c of mine) for (const sib of (partUsers[c] || []).slice(0, 40)) for (const p of K[sib][3]) near.add(p);
   if (famOf[k]) for (const sib of F[famOf[k]].k) for (const p of (K[sib][3] || [])) near.add(p);
-  const decoys = shuffle([...near].filter(p => !mine.includes(p) && D.parts[p] !== undefined && !FRAG[p]));
+  const decoys = shuffle([...near].filter(p => !mine.includes(p) && D.parts[p] !== undefined && !isCut(p)));
   const fill = shuffle(ALL_PARTS.filter(p => !mine.includes(p) && !decoys.includes(p)));
   const want = Math.max(6, Math.min(8, mine.length + 5));
   return shuffle(mine.concat(decoys.slice(0, want - mine.length - 1), fill).slice(0, want));
@@ -944,7 +964,7 @@ function answerLookFirst(i) {
   record({ step: "look_first", k, rival: x, right: R.right, picked: c, ok });
   if (ok) S.recap.push([k, x]);
   if (!ok) markGrid(".choice", R.opts, R.right, [c]); else btns[i].classList.add("right");
-  $("check").innerHTML = `${ok ? "✓" : "✗"} ${k} has ${R.right.map(o => `${o} ${D.parts[o] || (K[o] ? K[o][0] : "")}`).join(" + ")}; ${x} doesn't.`;
+  $("check").innerHTML = `${ok ? "✓" : "✗"} ${k} has ${R.right.map(o => `${pg(o)} ${D.parts[o] || (K[o] ? K[o][0] : "")}`).join(" + ")}; ${x} doesn't.`;
   proceed(meaningStep);
 }
 function spotStep() {
@@ -972,7 +992,7 @@ function answerSpot(i) {
   const btn = document.querySelectorAll(".choice")[i];
   if (ok) {
     btn.classList.add("right");
-    $("check").innerHTML = `✓ ${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}${whyHTML(t.k)}`;
+    $("check").innerHTML = `✓ ${pg(c)} ${D.parts[c] || (K[c] ? K[c][0] : "")}${whyHTML(t.k)}`;
     proceed(buildAdvance);
     return;
   }
@@ -980,7 +1000,7 @@ function answerSpot(i) {
   S.partsOk[t.k] = 0; store.set("partsOk", S.partsOk);
   markGrid(".choice", R.opts, R.right, [c]);
   setTimeout(() => startContrast(t.k, [t.rival], buildAdvance, 0,
-    `${t.k} has ${R.right.join(" + ")}; ${c} is ${ownParts(t.rival).includes(c) ? "in " + t.rival + " too" : "in neither"}.`), 700);
+    `${t.k} has ${R.right.map(pg).join(" + ")}; ${pg(c)} is ${ownParts(t.rival).includes(c) ? "in " + t.rival + " too" : "in neither"}.`), 700);
 }
 
 // step 2: which part gives its sound?
@@ -1601,8 +1621,8 @@ function checkLookPick() {
   record({ step: t.kind === "shared" ? "look_shared" : "look_diff", k: t.k || null, group: t.g, right: R.right, picked, ok });
   if (!ok) t.missed = true;
   const what = t.kind === "shared"
-    ? `They share ${R.right.map(c => `<span class="g">${c}</span>`).join(" + ")}`
-    : `<span class="g">${t.k}</span> adds ${R.right.map(c => `<span class="g">${c}</span> ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}`;
+    ? `They share ${R.right.map(c => `<span class="g">${pg(c)}</span>`).join(" + ")}`
+    : `<span class="g">${t.k}</span> adds ${R.right.map(c => `<span class="g">${pg(c)}</span> ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}`;
   if (!ok) {
     return failGrid(".ptile", R.opts, R.right, picked, `<p class="verdict"><span class="no">✗</span> ${what}.${picked.length ? ` You picked ${picked.map(c => `<span class="g">${pg(c)}</span>`).join(" ")}.` : ""}</p>
       ${groupHTML(t.g, t.kind === "diff" ? t.k : null)}`, lookAdvance);
@@ -1802,10 +1822,10 @@ function cxIntro(lead) {
   const { k, set } = S.cx, other = set[1];
   const { shared, diff } = groupParts([k, other]);
   const notice = diff[k].length && diff[other].length
-    ? `${shared.length ? `Both have ${shared.join(" ")}. ` : ""}<span class="g">${k}</span> has ${diff[k].map(c => `${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}; <span class="g">${other}</span> has ${diff[other].map(c => `${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}.`
+    ? `${shared.length ? `Both have ${shared.map(pg).join(" ")}. ` : ""}<span class="g">${k}</span> has ${diff[k].map(c => `${pg(c)} ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}; <span class="g">${other}</span> has ${diff[other].map(c => `${pg(c)} ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}.`
     : diff[k].length || diff[other].length
       ? (() => { const big = diff[k].length ? k : other, small = big === k ? other : k;
-          return `<span class="g">${big}</span> is <span class="g">${small}</span> plus ${diff[big].map(c => `${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}.`; })()
+          return `<span class="g">${big}</span> is <span class="g">${small}</span> plus ${diff[big].map(c => `${pg(c)} ${D.parts[c] || (K[c] ? K[c][0] : "")}`).join(" + ")}.`; })()
       : `Same parts: the difference is in the strokes. Compare their lengths and positions.`;
   S.phase = "cxfb";
   card(`
@@ -1870,7 +1890,7 @@ function answerCx(i) {
   if (ok) {
     c.streak++;
     btn.classList.add("right");
-    $("check").innerHTML = `✓ ${q.kind === "part" ? `${x}: ${D.parts[x] || (K[x] ? K[x][0] : "")}` : `${q.target} ${K[q.target][0]}`}${whyHTML(q.target)}`;
+    $("check").innerHTML = `✓ ${q.kind === "part" ? `${pg(x)}: ${D.parts[x] || (K[x] ? K[x][0] : "")}` : `${q.target} ${K[q.target][0]}`}${whyHTML(q.target)}`;
     proceed(cxNext);
     return;
   }
@@ -1882,7 +1902,7 @@ function answerCx(i) {
   $("check").innerHTML = "";
   const msg = q.kind === "pick" ? `<b>${K[q.target][0]}</b> is <span class="g">${q.target}</span>; <span class="g">${x}</span> is ${K[x][0]}.`
     : q.kind === "mean" ? `<span class="g">${q.target}</span> is <b>${K[q.target][0]}</b>; “${K[x][0]}” is <span class="g">${x}</span>.`
-    : `<span class="g">${q.target}</span> has ${groupParts([q.target, q.other]).diff[q.target].join(" ")} that <span class="g">${q.other}</span> doesn't.`;
+    : `<span class="g">${q.target}</span> has ${groupParts([q.target, q.other]).diff[q.target].map(pg).join(" ")} that <span class="g">${q.other}</span> doesn't.`;
   const box = document.querySelector("#card .step");
   if (box && box.insertAdjacentHTML) box.insertAdjacentHTML("beforeend", `<div class="cxmiss"><p class="miss-note">Not that one: ${msg}</p>
     ${compareHTML(q.target, wrongOne === q.target ? q.other : wrongOne)}
@@ -2011,7 +2031,7 @@ function bdDone() {
 // ======================= make it: a kanji you know well, asked backwards: meaning -> its parts -> which kanji
 function makeWanted(k, tile) {
   const c = kCard(k);
-  if (tile.fresh || tile.retry || !c || c.ivl < 6 || (S.partsOk[k] || 0) < 2 || ownParts(k).length < 2 || ownParts(k).some(p => FRAG[p])) return false;
+  if (tile.fresh || tile.retry || !c || c.ivl < 6 || (S.partsOk[k] || 0) < 2 || ownParts(k).length < 2 || ownParts(k).some(p => isCut(p))) return false;
   return rivals(k).length >= 2 && Math.random() < .35;
 }
 function makeStep() {
@@ -2096,8 +2116,8 @@ function recapHTML() {
     if (seen.has(id) || set.length < 2) continue;
     seen.add(id);
     const { shared, diff } = groupParts(set);
-    const bits = set.filter(x => diff[x].length).map(x => `${x} has ${diff[x].map(c => `${c} ${D.parts[c] || (K[c] ? K[c][0] : "")}`.trim()).join(" + ")}`);
-    const line = bits.length ? bits.join("; ") + (shared.length ? ` (they share ${shared.join(" ")})` : "") : "the same parts: the strokes differ";
+    const bits = set.filter(x => diff[x].length).map(x => `${x} has ${diff[x].map(c => `${pg(c)} ${D.parts[c] || (K[c] ? K[c][0] : "")}`.trim()).join(" + ")}`);
+    const line = bits.length ? bits.join("; ") + (shared.length ? ` (they share ${shared.map(pg).join(" ")})` : "") : "the same parts: the strokes differ";
     const mn = set.map(x => D.mnem && D.mnem[x]).find(Boolean);
     rows.push(`<div class="recap-row"><span class="g">${set.join(" ")}</span>${line}${mn ? `<small>${mn}</small>` : ""}</div>`);
   }

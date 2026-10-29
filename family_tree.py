@@ -212,8 +212,7 @@ if os.path.exists(ids_path):
     def walk(node, bb, poly, frame, out):
         op, kids = node
         if kids is None:
-            if op in bk.UNREPRESENTABLE:
-                out.append((poly, bb, frame))
+            out.append((op, poly, bb, frame))
             return
         for kid, (kbb, kpoly) in zip(kids, children(op, bb, poly)):
             walk(kid, kbb, kpoly, frame or (op in "⿴⿵⿶⿷⿸⿹⿺" and kid is kids[0]), out)
@@ -226,20 +225,32 @@ if os.path.exists(ids_path):
         v = "top" if cy < .4 else "bottom" if cy > .6 else ""
         return "-".join(x for x in (v, h) if x) or "middle"
 
+    css = lambda poly: "polygon(" + ", ".join("%.0f%% %.0f%%" % (x * 100, y * 100) for x, y in poly) + ")"
+    rare = {}   # rare characters (CJK extensions B and later) many fonts cannot draw: the best cut-out to show instead
     for k in pool:
         seq = ids.get(k)
         if not seq:
             continue
         node, _ = parse(re.sub(r"&[^;]+;", "", seq))
-        found = []
-        walk(node, (0, 0, 1, 1), [(0, 0), (1, 0), (1, 1), (0, 1)], False, found)
+        leaves = []
+        walk(node, (0, 0, 1, 1), [(0, 0), (1, 0), (1, 1), (0, 1)], False, leaves)
+        found = [(poly, bb, frame) for ch, poly, bb, frame in leaves if ch in bk.UNREPRESENTABLE]
         for n, (poly, bb, frame) in enumerate(found):
             pid = "◌" + k + (str(n + 1) if len(found) > 1 else "")
-            clip = "polygon(" + ", ".join("%.0f%% %.0f%%" % (x * 100, y * 100) for x, y in poly) + ")"
-            data["frag"][pid] = {"k": k, "clip": clip}
+            data["frag"][pid] = {"k": k, "clip": css(poly)}
             data["parts"][pid] = "shape with no character: %s" % where(bb, frame)
             data["kanji"][k][3] = data["kanji"][k][3] + [pid]
-    print("%d parts without a character added to %d kanji" % (len(data["frag"]), len({v["k"] for v in data["frag"].values()})))
+        for ch, poly, bb, frame in leaves:
+            if ord(ch) >= 0x20000 and ch in used and ch != k:
+                score = (0 if frame else 1, (bb[2] - bb[0]) * (bb[3] - bb[1]))
+                if ch not in rare or score > rare[ch][0]:
+                    rare[ch] = (score, k, poly)
+    for ch, (_, k, poly) in rare.items():
+        data["frag"][ch] = {"k": k, "clip": css(poly), "rare": 1}
+        if not data["parts"].get(ch):
+            data["parts"][ch] = "rare shape"
+    print("%d cut-out parts: %d with no character, %d rare characters some fonts cannot draw"
+          % (len(data["frag"]), len(data["frag"]) - len(rare), len(rare)))
 blob = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 assert "</script" not in blob
 tpl = sys.argv[3] if len(sys.argv) > 3 else "family_tree_template.html"
