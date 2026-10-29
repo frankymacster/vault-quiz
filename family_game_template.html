@@ -272,6 +272,28 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
   </section>
 </div>
 
+<script>
+// if anything goes wrong while the page loads or while playing, say what, and offer to clear this browser's saved state
+(function () {
+  function banner(msg) {
+    var b = document.getElementById("kfb-err");
+    if (!b) {
+      b = document.createElement("div"); b.id = "kfb-err";
+      b.style.cssText = "position:fixed;left:8px;right:8px;top:8px;z-index:99;padding:10px 12px;border-radius:10px;background:#f8e1de;color:#7a1f16;font:13px/1.4 system-ui,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.25)";
+      (document.body || document.documentElement).appendChild(b);
+    }
+    b.textContent = "Something went wrong: " + msg + " ";
+    function btn(label, fn) { var x = document.createElement("button"); x.textContent = label; x.style.cssText = "margin:4px 8px 0 0;font:inherit;padding:4px 10px"; x.onclick = fn; b.appendChild(x); }
+    btn("Reset this browser's saved state", function () {
+      try { Object.keys(localStorage).filter(function (k) { return k.indexOf("kfb:") === 0; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (e) {}
+      location.reload();
+    });
+    btn("Dismiss", function () { b.remove(); });
+  }
+  window.addEventListener("error", function (e) { banner((e.message || "error") + (e.lineno ? " (line " + e.lineno + ")" : "")); });
+  window.addEventListener("unhandledrejection", function (e) { banner("unhandled: " + ((e.reason && e.reason.message) || e.reason)); });
+})();
+</script>
 <script id="data" type="application/json">__DATA__</script>
 <script>
 const D = JSON.parse(document.getElementById("data").textContent);
