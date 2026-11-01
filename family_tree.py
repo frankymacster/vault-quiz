@@ -96,6 +96,8 @@ if os.path.exists(kdb_path):
 # the quiz's schedule, so the game can aim at what's due: [due date, misses] per kanji in progress
 card = lambda c: [datetime.date.fromordinal(c["due"]).isoformat(), c.get("lapses", 0), c.get("reps", 0),
                   c.get("ivl", 0), c.get("ease", 2.5)]
+# step multipliers fitted to your answers (fit_scheduler.py); null while .scheduler.json is not enabled
+data["sched"] = dict(q.SCHED) if q.SCHED != {"2": 1.0, "3": 1.0, "4": 1.0} else None
 data["srs"] = {k: card(state[k]) for k in pool if k in state and not kanji[k]["known"] and state[k].get("due")}
 # answers the game made before this moment are already in the schedule above
 data["synced"] = int(time.time())

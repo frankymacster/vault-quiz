@@ -371,12 +371,13 @@ const todayISO = () => isoOf(new Date());
 const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return isoOf(d); };
 // SM-2 as in quiz.py's schedule()
 const pyRound = x => { const f = Math.floor(x), d = x - f; return d < .5 ? f : d > .5 ? f + 1 : (f % 2 === 0 ? f : f + 1); };
+const SCHEDM = D.sched || { "2": 1, "3": 1, "4": 1 };   // fitted step multipliers, when the vault has them enabled
 function sm2(c, grade) {
   let { ease = 2.5, reps = 0, ivl = 0, lapses = 0 } = c;
   if (grade === 1) { reps = 0; ivl = 0; ease = Math.max(1.3, ease - .2); lapses++; }
   else {
     const stepping = lapses >= HARD_LAPSES && reps < HARD_STEPS.length;
-    ivl = stepping ? HARD_STEPS[reps] : reps === 0 ? 1 : reps === 1 ? 6 : Math.max(1, pyRound(ivl * (grade >= 3 ? ease : 1.2)));
+    ivl = stepping ? HARD_STEPS[reps] : reps === 0 ? 1 : reps === 1 ? Math.max(1, pyRound(6 * SCHEDM["2"])) : Math.max(1, pyRound(ivl * (grade >= 3 ? ease * SCHEDM[reps === 2 ? "3" : "4"] : 1.2)));
     if (grade === 2) ease = Math.max(1.3, ease - .15);
     reps++;
   }

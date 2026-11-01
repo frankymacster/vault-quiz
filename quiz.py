@@ -62,8 +62,11 @@ P = {}
 LEVEL_ORDER = {}
 
 
+SCHED = {"2": 1.0, "3": 1.0, "4": 1.0}   # step multipliers from fit_scheduler.py, used only when .scheduler.json says enabled
+
+
 def use_vault(path):
-    global VAULT, STATE, FOLDER, P, LEVEL_ORDER
+    global VAULT, STATE, FOLDER, P, LEVEL_ORDER, SCHED
     VAULT = os.path.abspath(path)
     FOLDER = next((f for f in PROFILES if os.path.isdir(os.path.join(VAULT, f))), None)
     if FOLDER is None:
@@ -71,6 +74,12 @@ def use_vault(path):
     P = PROFILES[FOLDER]
     STATE = os.path.join(VAULT, ".quiz_state.json")
     LEVEL_ORDER = {lvl: i for i, lvl in enumerate(P["levels"] + ["?"])}
+    SCHED = {"2": 1.0, "3": 1.0, "4": 1.0}
+    sp = os.path.join(VAULT, ".scheduler.json")
+    if os.path.exists(sp):
+        cfg = json.load(open(sp, encoding="utf-8"))
+        if cfg.get("enabled"):
+            SCHED.update({k: float(v) for k, v in cfg.get("multipliers", {}).items() if k in SCHED})
 
 
 MATURE = 21          # days; interval at which a card is tagged `known`
@@ -578,9 +587,9 @@ def schedule(card, grade):
         elif reps == 0:
             ivl = 1
         elif reps == 1:
-            ivl = 6
+            ivl = max(1, round(6 * SCHED["2"]))
         else:
-            ivl = max(1, round(ivl * (ease if grade >= 3 else 1.2)))
+            ivl = max(1, round(ivl * (ease * SCHED["3" if reps == 2 else "4"] if grade >= 3 else 1.2)))
         if grade == 2:
             ease = max(1.3, ease - 0.15)
         elif grade == 4:
