@@ -672,6 +672,7 @@ function answerMeaning(i) {
 }
 function answerConf(c) {
   if (S.phase !== "conf" || Date.now() - S.confAt < 300) return;
+  const ask = $("conf"); if (ask && ask.remove) ask.remove();   // the question goes once answered: only Continue is left
   S.phase = "meaning";
   settleMeaning(S.confPick, c);
 }
