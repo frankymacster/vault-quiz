@@ -68,14 +68,15 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .verdict.mk { font-size: 1.4rem; }
 /* a kanji's blink comparator: the two overlaid and alternating, so what differs flashes and what is shared holds still */
 .hold { display: grid; gap: 18px; justify-items: center; width: 100%; }
-.blink { position: relative; width: 1.25em; height: 1.2em; margin: 0 auto; font-family: var(--glyph); font-weight: 700; font-size: clamp(3rem, 16vw, 5rem); line-height: 1; animation: blinkbox 2.4s both; }
-.blink span { position: absolute; inset: 0; display: grid; place-items: center; }
-.blink .ba { animation: ba .9s ease-in-out .5s 2 both; }
-.blink .bb { opacity: 0; animation: bb .9s ease-in-out .5s 2 both; }
-@keyframes blinkbox { 0% { opacity: 0; } 15%, 85% { opacity: 1; } 99% { opacity: 0; height: 1.2em; } 100% { opacity: 0; height: 0; } }
-@keyframes ba { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-@keyframes bb { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
-.stage-hold { opacity: 0; visibility: hidden; animation: reveal .4s ease-out 2.3s forwards; }
+.cmp { position: relative; width: 2.9em; height: 1.2em; margin: 0 auto; font-family: var(--glyph); font-weight: 700; font-size: clamp(3rem, 16vw, 5rem); line-height: 1; }
+.cmp span { position: absolute; left: 50%; top: 0; width: 1.2em; margin-left: -.6em; text-align: center; color: var(--ink); }
+.cmp .ca { animation: ca 3s ease-in-out both; }
+.cmp .cb { animation: cb 3s ease-in-out both; }
+/* 0-.5 s the first kanji alone, .5-2.3 s the two overlaid and alternating (what differs flashes), then they slide apart */
+@keyframes ca { 0%, 16.7% { opacity: 1; transform: none; } 31.7% { opacity: 0; } 46.7% { opacity: 1; } 61.7% { opacity: 0; } 76.7% { opacity: 1; transform: none; } 100% { opacity: 1; transform: translateX(-.73em); } }
+@keyframes cb { 0%, 16.7% { opacity: 0; transform: none; } 31.7% { opacity: 1; } 46.7% { opacity: 0; } 61.7% { opacity: 1; } 76.7% { opacity: 0; transform: none; color: var(--ink); } 100% { opacity: 1; transform: translateX(.73em); color: var(--muted); } }
+.lglyphs.more { font-size: 2rem; }
+.stage-hold { opacity: 0; visibility: hidden; animation: reveal .4s ease-out 3s forwards; }
 .stage-hold.go { animation: none; opacity: 1; visibility: visible; }
 @keyframes reveal { from { opacity: 0; visibility: hidden; } to { opacity: 1; visibility: visible; } }
 /* after a mistake the grid stays and says what was right */
@@ -225,7 +226,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
 .enter { animation: rise .2s ease-out; }
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (max-width: 480px) { .glyph { font-size: 4.8rem; } h1 { font-size: 1.5rem; } }
-@media (prefers-reduced-motion: reduce) { .enter, .step.fail, .shake, .part.diff, .parts .part.build, .crow.built .cg { animation: none; } .spotlit .dim { transition: none; } .blink { display: none; } .stage-hold { animation: none; opacity: 1; visibility: visible; } .choice.missed, .ptile.missed { animation: none; } .track i { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .enter, .step.fail, .shake, .part.diff, .parts .part.build, .crow.built .cg { animation: none; } .spotlit .dim { transition: none; } .stage-hold { animation: none; opacity: 1; visibility: visible; } .choice.missed, .ptile.missed { animation: none; } .track i { transition: none; } }
 </style>
 
 <div class="wrap">
@@ -533,10 +534,12 @@ function okContinue() {
 }
 // both kanji first, then a blink comparator; the choices appear after it (Enter skips)
 function blinkStage(a, b, all) {
+  const rest = (all || [a, b]).filter(x => x !== a && x !== b);
   const row = `<div class="lglyphs">${(all || [a, b]).map(x => `<span class="${x === a ? "on" : ""}">${x}</span>`).join("")}</div>`;
   if (REDUCED) return row;
-  S.stageNext = Date.now() + 2400;
-  return `${row}<div class="blink" aria-hidden="true"><span class="ba">${a}</span><span class="bb">${b}</span></div>`;
+  S.stageNext = Date.now() + 3300;
+  return `<div class="cmp" aria-hidden="true"><span class="ca">${a}</span><span class="cb">${b}</span></div>` +
+    (rest.length ? `<div class="lglyphs more${holdCls()}">${rest.map(x => `<span>${x}</span>`).join("")}</div>` : "");
 }
 function endStage() { S.stageUntil = 0; document.querySelectorAll(".stage-hold").forEach(el => el.classList.add("go")); }
 // after a mistake the grid stays and says what was right: green for the right ones (a dashed pulse on those you
