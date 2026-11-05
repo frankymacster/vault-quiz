@@ -164,6 +164,11 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .ptile { display: grid; justify-items: center; gap: 2px; background: var(--sheet); border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 6px 8px; cursor: pointer; position: relative; }
 .ptile .key { position: absolute; top: 4px; left: 7px; font-family: var(--mono); font-size: .66rem; color: var(--muted); }
 .ptile .pg { font-family: var(--glyph); font-weight: 700; font-size: 1.9rem; line-height: 1.1; }
+.mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; width: 100%; }
+.mcol { display: grid; gap: 8px; align-content: start; }
+.ptile.mt { min-height: 64px; align-content: center; }
+.ptile.mt .pm.mean { font-size: 1rem; color: var(--ink); }
+.ptile.mt.done { pointer-events: none; }
 .ptile .pm { font-size: .74rem; color: var(--muted); text-align: center; overflow-wrap: anywhere; }
 .ptile[aria-pressed=true] { border-color: var(--indigo); box-shadow: 0 0 0 2px var(--indigo); }
 .ptile:hover { border-color: var(--indigo); }
@@ -1578,6 +1583,7 @@ function startLookalikes(given) {
     if (shared.length) tiles.push({ kind: "shared", g, gi });
     for (const k of g) if (diff[k].length) tiles.push({ kind: "diff", k, g, gi });
     tiles.push({ kind: "compare", g, gi });
+    if (g.length > 1 && g.every((x, i) => g.every((y, j) => i === j || !overlaps(K[x][0], K[y][0])))) tiles.push({ kind: "match", g, gi });
     shuffle(g.slice()).forEach(k => tiles.push({ kind: "type", k, g, gi, fresh: unstarted.includes(k) }));
     shuffle(g.slice()).forEach(k => tiles.push({ kind: "rev", k, g, gi }));
   });
@@ -1669,6 +1675,7 @@ function lookTile() {
   if (t.kind === "study") return newStudy(t.k, lookAdvance);
   if (t.kind === "shared" || t.kind === "diff") return lookPick(t);
   if (t.kind === "compare") return lookCompare(t.g);
+  if (t.kind === "match") return lookMatch(t);
   if (t.kind === "type") return lookType(t);
   return lookRev(t);
 }
@@ -1697,6 +1704,54 @@ function lookCompare(g) {
     <button class="next" type="button" id="cont" data-focus>Got it</button>
     <p class="sub">or press Enter</p>`);
   $("cont").addEventListener("click", lookAdvance);
+}
+function lookMatch(t) {
+  const R = S.round, g = t.g, n = g.length;
+  R.m = { L: shuffle(g.slice()), Rr: shuffle(g.slice()), done: new Set(), selL: null, selR: null, wrong: 0, busy: false };
+  S.phase = "lmatch"; S.locked = false;
+  const btn = (side, k, i, inner) => `<button class="ptile mt" type="button" data-side="${side}" data-k="${k}" aria-pressed="false"><span class="key">${(side === "L" ? 0 : n) + i + 1}</span>${inner}</button>`;
+  card(`
+    <p class="q">match each kanji to its meaning</p>
+    <div class="mgrid">
+      <div class="mcol">${R.m.L.map((k, i) => btn("L", k, i, `<span class="pg">${k}</span>`)).join("")}</div>
+      <div class="mcol">${R.m.Rr.map((k, i) => btn("R", k, i, `<span class="pm mean">${K[k][0]}</span>`)).join("")}</div>
+    </div>
+    <p class="sub">tap a kanji and its meaning, or press 1–${2 * n}</p>`);
+  document.querySelectorAll(".ptile.mt").forEach(b => b.addEventListener("click", () => pickMatch(b.dataset.side, b.dataset.k)));
+}
+function pickMatch(side, k) {
+  const R = S.round, M = R.m, t = R.tiles[R.i];
+  if (S.phase !== "lmatch" || M.busy || M.done.has(k)) return;
+  const f = "sel" + side;
+  M[f] = M[f] === k ? null : k;
+  const els = [...document.querySelectorAll(".ptile.mt")];
+  els.forEach(b => b.setAttribute("aria-pressed", b.dataset.side === side && M[f] === b.dataset.k));
+  if (!M.selL || !M.selR) return;
+  const a = M.selL, b = M.selR, ok = a === b;
+  record({ step: "look_match", group: t.g, k: a, other: b, ok });
+  const both = els.filter(x => (x.dataset.side === "L" && x.dataset.k === a) || (x.dataset.side === "R" && x.dataset.k === b));
+  if (ok) {
+    M.done.add(a); M.selL = M.selR = null;
+    both.forEach(x => { x.classList.add("right", "done"); x.setAttribute("aria-pressed", false); });
+    if (M.done.size === t.g.length) setTimeout(() => lookMatched(t), 500);
+    return;
+  }
+  M.wrong++; M.busy = true;
+  both.forEach(x => { x.classList.add("wrong"); shake(x); });
+  setTimeout(() => {
+    both.forEach(x => { x.classList.remove("wrong"); x.setAttribute("aria-pressed", false); });
+    M.selL = M.selR = null; M.busy = false;
+  }, 700);
+}
+function lookMatched(t) {
+  if (S.phase !== "lmatch") return;
+  S.phase = "review";
+  card(`
+    <p class="verdict">${S.round.m.wrong ? "✓ Matched" : "✓ All matched first time"}. Here is how they differ.</p>
+    ${groupHTML(t.g)}
+    <button class="next" type="button" id="cont" data-focus>Continue</button>`);
+  S.afterReview = lookAdvance;
+  $("cont").addEventListener("click", continueReview);
 }
 function lookType(t) {
   S.phase = "ltype"; S.locked = false;
@@ -2424,6 +2479,12 @@ document.addEventListener("keydown", e => {
   if (S.phase === "nstudy" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueNewStudy(); return; }
   if (S.phase === "lpick" && /^[1-9]$/.test(e.key)) { e.preventDefault(); toggleLookPart(+e.key - 1); return; }
   if (S.phase === "lpick" && e.key === "Enter") { e.preventDefault(); checkLookPick(); return; }
+  if (S.phase === "lmatch" && /^[1-8]$/.test(e.key)) {
+    e.preventDefault();
+    const n = S.round.m.L.length, i = +e.key - 1;
+    if (i < n) pickMatch("L", S.round.m.L[i]); else if (i < 2 * n) pickMatch("R", S.round.m.Rr[i - n]);
+    return;
+  }
   if (S.phase === "lcompare" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); lookAdvance(); return; }
   if (S.phase === "cx" && /^[1-9]$/.test(e.key)) { e.preventDefault(); answerCx(+e.key - 1); return; }
   if (S.phase === "cxfb" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); cxNext(); return; }
@@ -2467,7 +2528,7 @@ document.addEventListener("keydown", e => {
   if (S.phase === "breading" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerBuildReading(+e.key - 1); return; }
   if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (["meaning", "parts", "spot", "lfirst", "bdkanji", "bdparts", "mkparts", "mkpick", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lrev", "nstudy", "lpick", "cx", "cxfb", "cxdone"].includes(S.phase)) {
+  } else if (["meaning", "parts", "spot", "lfirst", "bdkanji", "bdparts", "mkparts", "mkpick", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lmatch", "lrev", "nstudy", "lpick", "cx", "cxfb", "cxdone"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });
