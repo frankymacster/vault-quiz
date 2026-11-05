@@ -2147,8 +2147,6 @@ function bdDone() {
   card(`
     <p class="q">put together</p>
     ${treeHTML({ all: true, up: true, parts: b.partsDone ? b.pk : null })}
-    <p class="verdict">${[...new Set(wKanji(w))].map(k => `<span class="g">${k}</span> ${K[k][0].split(/[;,]/)[0]}`).join(" + ")}</p>
-    <div class="glyph word">${W[w][0]}</div>
     <p class="wread">${W[w][1]}</p>
     <p class="hint">${W[w][2]}</p>`);
   proceed(() => { const t = b.then; S.bd = null; t(); });
