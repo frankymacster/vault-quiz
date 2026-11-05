@@ -65,6 +65,31 @@ h1 .jp { color: var(--indigo); margin-right: .3em; }
 .crow.built .cg { animation: settle .5s ease-out 1s both; }
 .spotlit .dim { opacity: .22; transition: opacity .4s; }
 .spotlit .hl { color: var(--indigo); }
+.wtree { display: grid; justify-items: center; width: 100%; }
+.wt-top { font-family: var(--glyph); font-weight: 700; font-size: clamp(2.2rem, 11vw, 3.4rem); line-height: 1.1; animation: snapin .45s both; }
+.wt-stem { width: 2px; height: 14px; background: var(--line); transform-origin: top; animation: wtGrow .3s .35s both; }
+.wt-kids { display: flex; justify-content: center; }
+.wt-kid { position: relative; padding: 14px 6px 0; display: grid; justify-items: center; align-content: start; gap: 2px; min-width: 68px; animation: snapin .4s calc(.55s + var(--i) * .15s) both; }
+.wt-kid::before { content: ""; position: absolute; top: 0; left: 0; right: 0; border-top: 2px solid var(--line); }
+.wt-kid:first-child::before { left: 50%; }
+.wt-kid:last-child::before { right: 50%; }
+.wt-kid:only-child::before { display: none; }
+.wt-kid::after { content: ""; position: absolute; top: 0; left: calc(50% - 1px); height: 14px; border-left: 2px solid var(--line); }
+.wt-node { font-family: var(--glyph); font-weight: 700; font-size: clamp(1.7rem, 8vw, 2.3rem); line-height: 1.15; padding: 0 10px; border-radius: 10px; border: 1.5px solid transparent; }
+.wt-kid.wait .wt-node { opacity: .45; }
+.wt-kid.lit .wt-node { border-color: var(--indigo); color: var(--indigo); box-shadow: 0 0 0 2px var(--indigo); animation: settle .6s; }
+.wt-m { font-size: .8rem; color: var(--ink); text-align: center; max-width: 96px; min-height: 1.1em; overflow-wrap: anywhere; }
+.wt-kid.lit .wt-m { color: var(--muted); }
+.wt-m.miss { color: var(--bad); }
+.wt-parts { display: flex; gap: 8px; justify-content: center; padding-top: 12px; position: relative; animation: snapin .4s .1s both; }
+.wt-parts::before { content: ""; position: absolute; top: 0; left: calc(50% - 1px); height: 12px; border-left: 2px solid var(--line); }
+.wt-p { display: grid; justify-items: center; }
+.wt-p .g { font-family: var(--glyph); font-weight: 700; font-size: 1.35rem; line-height: 1.15; }
+.wt-p small { font-size: .68rem; color: var(--muted); max-width: 70px; overflow-wrap: anywhere; }
+@keyframes wtGrow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+.wtree.still .wt-top, .wtree.still .wt-stem, .wtree.still .wt-kid, .wtree.still .wt-parts { animation: none; }
+.wtree.up .wt-kid .wt-node { animation: settle .5s calc(var(--i) * .2s) both; }
+.wtree.up .wt-top { animation: settle .6s calc(var(--n) * .2s + .3s) both; }
 .verdict.mk { font-size: 1.4rem; }
 /* a kanji's blink comparator: the two overlaid and alternating, so what differs flashes and what is shared holds still */
 .hold { display: grid; gap: 18px; justify-items: center; width: 100%; }
@@ -231,7 +256,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6p
 .enter { animation: rise .2s ease-out; }
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (max-width: 480px) { .glyph { font-size: 4.8rem; } h1 { font-size: 1.5rem; } }
-@media (prefers-reduced-motion: reduce) { .enter, .step.fail, .shake, .part.diff, .parts .part.build, .crow.built .cg { animation: none; } .spotlit .dim { transition: none; } .stage-hold { animation: none; opacity: 1; visibility: visible; } .choice.missed, .ptile.missed { animation: none; } .track i { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .enter, .step.fail, .shake, .part.diff, .parts .part.build, .crow.built .cg { animation: none; } .spotlit .dim { transition: none; } .stage-hold { animation: none; opacity: 1; visibility: visible; } .choice.missed, .ptile.missed { animation: none; } .wtree *, .wtree.up .wt-top { animation: none !important; } .track i { transition: none; } }
 </style>
 
 <div class="wrap">
@@ -520,7 +545,8 @@ function show(view) {
 function card(html) {
   S.stageUntil = S.stageNext || 0; S.stageNext = 0;
   const c = $("card");
-  c.innerHTML = `<div class="step enter${html.includes('class="no"') ? " fail" : ""}">${html}</div>`;
+  const still = html.includes('class="wtree still')
+  c.innerHTML = `<div class="step${still ? "" : " enter"}${html.includes('class="no"') ? " fail" : ""}">${html}</div>`;
   const first = c.querySelector("[data-focus]");
   if (first) first.focus();
 }
@@ -2038,13 +2064,29 @@ function kanjiMeaningOptions(k) {
 function wordSpot(w, k) {
   return `<div class="glyph word spotlit">${W[w][5].map(([t]) => `<span class="${t === k ? "hl" : "dim"}">${t}</span>`).join("")}</div>`;
 }
+// the word, its kanji, and a kanji's parts, drawn once and kept on the page while each kanji is asked about
+function treeHTML(st) {
+  const b = S.bd, w = b.w, ks = [...new Set(wKanji(w))], still = !!b.drawn;
+  b.drawn = true;
+  const done = new Set(st.all ? ks : [b.focal, ...b.ask.slice(0, b.i)]);
+  if (st.asked) b.ask.forEach(k => done.add(k));
+  const kid = (k, i) => {
+    const ai = b.ask.indexOf(k), miss = ai >= 0 && b.ok[ai] === false;
+    const cls = k === st.lit ? "lit" : done.has(k) ? "done" : "wait";
+    return `<div class="wt-kid ${cls}" style="--i:${i}"><span class="wt-node">${k}</span>
+      <span class="wt-m${miss ? " miss" : ""}">${k === st.lit ? "?" : done.has(k) ? K[k][0].split(/[;,]/)[0] : ""}</span>
+      ${st.parts === k ? `<div class="wt-parts">${K[k][3].map(c => `<span class="wt-p"><span class="g">${pg(c)}</span><small>${D.parts[c] || ""}</small></span>`).join("")}</div>` : ""}</div>`;
+  };
+  return `<div id="bdtree" class="wtree${still ? " still" : ""}${st.up ? " up" : ""}" data-w="${w}" style="--n:${ks.length}">
+    <div class="wt-top">${W[w][0]}</div><div class="wt-stem"></div><div class="wt-kids">${ks.map(kid).join("")}</div></div>`;
+}
 function bdKanjiStep() {
   const b = S.bd, k = b.ask[b.i];
   b.opts = kanjiMeaningOptions(k);
   S.phase = "bdkanji"; S.locked = false;
   card(`
-    <p class="q">in <span class="g">${W[b.w][0]}</span>: what does the lit kanji mean?</p>
-    ${wordSpot(b.w, k)}
+    <p class="q">what does the lit kanji mean?</p>
+    ${treeHTML({ lit: k })}
     <div class="choices" role="group" aria-label="Meanings">
       ${b.opts.map((o, i) => `<button class="choice" type="button" data-i="${i}"><span class="key">${i + 1}</span><span class="txt">${o.g}</span></button>`).join("")}
     </div>
@@ -2070,7 +2112,7 @@ function bdParts() {
   S.phase = "bdparts"; S.locked = false;
   card(`
     <p class="q">which parts is <span class="g">${k}</span> made of? <span style="text-transform:none;letter-spacing:0">(pick all of them)</span></p>
-    <div class="glyph">${k}</div>
+    ${treeHTML({ lit: k, asked: true })}
     <div class="pgrid" role="group" aria-label="Parts">
       ${b.popts.map((c, i) => `<button class="ptile" type="button" data-i="${i}" aria-pressed="false"><span class="key">${i + 1}</span><span class="pg">${pg(c)}</span><span class="pm">${D.parts[c] || ""}</span></button>`).join("")}
     </div>
@@ -2094,7 +2136,8 @@ function checkBdParts() {
   const ok = picked.length === mine.length && mine.every(c => picked.includes(c));
   record({ step: "word_parts", w: b.w, k, right: mine, picked, ok });
   if (!ok) return failGrid(".ptile", b.popts, mine, picked, `<p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> is built from ${mine.map(c => `<span class="g">${pg(c)}</span>`).join(" + ")}</p>${partsRow(k, "", "built from")}`, bdDone);
-  card(`<p class="q">which parts is it made of?</p>${partsRow(k, "right", "built from")}<p class="check">✓</p>`);
+  b.partsDone = true;
+  card(`<p class="q">which parts is it made of?</p>${treeHTML({ parts: k, asked: true })}<p class="check">✓ ${k} is built from ${mine.map(c => pg(c)).join(" + ")}</p>`);
   proceed(bdDone);
 }
 // ...and the word, put back together from what you just recalled
@@ -2103,6 +2146,7 @@ function bdDone() {
   record({ step: "word_break_done", w, ok: b.ok.every(Boolean) });
   card(`
     <p class="q">put together</p>
+    ${treeHTML({ all: true, up: true, parts: b.partsDone ? b.pk : null })}
     <p class="verdict">${[...new Set(wKanji(w))].map(k => `<span class="g">${k}</span> ${K[k][0].split(/[;,]/)[0]}`).join(" + ")}</p>
     <div class="glyph word">${W[w][0]}</div>
     <p class="wread">${W[w][1]}</p>
