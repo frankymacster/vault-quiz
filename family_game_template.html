@@ -395,7 +395,7 @@ if (!["knew", "build", "lookalikes", "wnew", "words"].includes(S.mode)) S.mode =
 // ---- the schedule: your quiz's cards as of the last sync, plus what you've answered here since,
 // applied with the same rules game_sync.py uses, so progress shows before it reaches the vault
 const SRS = D.srs || {}, VS = D.vsrs || {};
-const MATURE = 21, HARD_LAPSES = 3, HARD_STEPS = [1, 3, 7];
+const MATURE = 21, MAX_IVL = 365, HARD_LAPSES = 3, HARD_STEPS = [1, 3, 7];
 const isoOf = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const todayISO = () => isoOf(new Date());
 const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return isoOf(d); };
@@ -411,6 +411,7 @@ function sm2(c, grade) {
     if (grade === 2) ease = Math.max(1.3, ease - .15);
     reps++;
   }
+  ivl = Math.min(ivl, MAX_IVL);
   return { ease: Math.round(ease * 100) / 100, reps, ivl, lapses, due: addDays(ivl) };
 }
 const fromSync = a => a && { due: a[0], lapses: a[1], reps: a[2], ivl: a[3], ease: a[4] };
@@ -494,7 +495,12 @@ function setSaved(on, msg) {
   el.textContent = msg || (on ? "Every answer is saved for Claude to analyse with your quiz logs."
                               : "Scores are saved in this browser only.");
 }
+// a sitting runs until you stop answering for five minutes; after half an hour the plan offers a stop
+const SIT_BREAK = 30 * 60e3;
 function record(e) {
+  const now = Date.now();
+  if (!S.sitLast || now - S.sitLast > 300e3) S.sitStart = now;
+  S.sitLast = now;
   const tile = S.round && S.round.tiles && S.round.tiles[S.round.i];
   results.events.push({ t: Math.round(Date.now() / 1000), level: S.level, mode: S.mode, focus: S.focus,
                         ...(tile && tile.retry ? { retry: true } : {}), ...e });
@@ -780,7 +786,9 @@ function buildSteps(k, tile) {
   }
   const rival = spotRival(k, tile);
   if (rival) tile.rival = rival;
-  const steps = [rival ? "spot" : "parts"];
+  // a kanji whose parts you've got right three times running is asked about them one time in three
+  const skipParts = !rival && !tile.fresh && !tile.retry && (S.partsOk[k] || 0) >= 3 && Math.random() > 1 / 3;
+  const steps = skipParts ? [] : [rival ? "spot" : "parts"];
   if (Object.values((D.roles && D.roles[k]) || {}).includes("s")) steps.push("sound");
   steps.push("meaning");
   // the reading is asked inside the kanji's anchor word, where the word decides which reading applies
@@ -924,8 +932,59 @@ function partOptions(k) {
   const want = Math.max(6, Math.min(8, mine.length + 5));
   return shuffle(mine.concat(decoys.slice(0, want - mine.length - 1), fill).slice(0, want));
 }
+const partGloss = c => D.parts[c] || (K[c] ? K[c][0] : "");
+function typedPartsOk(k, tile) {
+  const mine = K[k][3];
+  return !tile.noType && !tile.fresh && !tile.retry && (S.partsOk[k] || 0) >= 3 && mine.length >= 2
+    && mine.every(c => !isCut(c) && partGloss(c) && !/^(shape with|rare shape)/.test(partGloss(c)));
+}
+// a kanji you know well is asked as recall, not recognition: name what each part means
+function partsTypeStep() {
+  const R = S.round, { k } = R.tiles[R.i];
+  S.phase = "ptype"; S.locked = false;
+  renderBar();
+  card(`
+    <p class="q">name the parts of this kanji <span class="typed-tag">type it</span></p>
+    <div class="glyph">${k}</div>
+    <div class="typed-row">
+      <input id="ptype" class="wtype" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" lang="en"
+        aria-label="Parts" placeholder="what each part means, separated by commas" data-focus>
+      <button class="next" type="button" id="pcheck">Check</button>
+    </div>
+    <p class="sub">${K[k][3].length} parts · Enter to check, empty to see choices</p>`);
+  $("ptype").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); checkPartsTyped(); } });
+  $("pcheck").addEventListener("click", checkPartsTyped);
+}
+function checkPartsTyped() {
+  const R = S.round, t = R.tiles[R.i], { k } = t, mine = K[k][3];
+  if (S.phase !== "ptype" || S.locked) return;
+  const guess = $("ptype").value.trim();
+  if (!guess) { t.noType = true; return partsStep(); }
+  S.locked = true;
+  const tokens = guess.split(/[,;、+/]+|\s+and\s+/i).map(x => x.trim()).filter(Boolean);
+  const hits = (tok, c) => tok === c || overlaps(tok, partGloss(c));
+  const ok = mine.every(c => tokens.some(tok => hits(tok, c))) && tokens.every(tok => mine.some(c => hits(tok, c)));
+  const done = good => {
+    R.results[R.results.length - 1].parts = good;
+    S.partsOk[k] = good ? (S.partsOk[k] || 0) + 1 : 0; store.set("partsOk", S.partsOk);
+  };
+  record({ step: "build_parts", k, status: K[k][2], right: mine, picked: tokens, typed: true, ok });
+  done(ok);
+  if (ok) {
+    card(`<p class="q">which parts is it made of?</p><div class="glyph">${k}</div>
+      ${partsRow(k, "right", "built from")}<p class="check">✓</p>`);
+    return proceed(buildAdvance);
+  }
+  card(`<p class="verdict"><span class="no">✗</span> <span class="g">${k}</span> is built from ${mine.map(c => `<span class="g">${pg(c)}</span> ${partGloss(c)}`).join(" + ")}</p>
+    ${partsRow(k, "", "its parts")}`);
+  proceed(buildAdvance);
+  const b = document.querySelector("#card .step");
+  if (b && b.insertAdjacentHTML) b.insertAdjacentHTML("beforeend", `<button class="ghost" type="button" id="povr">I was right</button>`);
+  if ($("povr")) $("povr").addEventListener("click", () => { done(true); okContinue(); });
+}
 function partsStep() {
   const R = S.round, { k } = R.tiles[R.i];
+  if (typedPartsOk(k, R.tiles[R.i])) return partsTypeStep();
   R.opts = partOptions(k); R.sel = new Set();
   S.phase = "parts"; S.locked = false;
   renderBar();
@@ -1610,8 +1669,13 @@ function startLookalikes(given) {
     for (const k of g) if (diff[k].length) tiles.push({ kind: "diff", k, g, gi });
     tiles.push({ kind: "compare", g, gi });
     if (g.length > 1 && g.every((x, i) => g.every((y, j) => i === j || !overlaps(K[x][0], K[y][0])))) tiles.push({ kind: "match", g, gi });
-    shuffle(g.slice()).forEach(k => tiles.push({ kind: "type", k, g, gi, fresh: unstarted.includes(k) }));
-    shuffle(g.slice()).forEach(k => tiles.push({ kind: "rev", k, g, gi }));
+    // typing and choosing alternate, each kanji's choice coming after its typing: never more than two of a kind in a row
+    const order = shuffle(g.slice());
+    order.forEach((k, i) => {
+      tiles.push({ kind: "type", k, g, gi, fresh: unstarted.includes(k) });
+      if (i >= 1) tiles.push({ kind: "rev", k: order[i - 1], g, gi });
+    });
+    tiles.push({ kind: "rev", k: order[order.length - 1], g, gi });
   });
   S.round = { looks: true, groups, fams: [], tiles, i: 0, results: [],
               notice: S.fellBack ? "nothing due here: other lookalikes" : "" };
@@ -2374,7 +2438,24 @@ function planDecide() {
 }
 function planNext() {
   S.planLevels = null;
+  if (S.sitStart && Date.now() - S.sitStart >= SIT_BREAK && Date.now() >= (S.breakAfter || 0)) return planBreak();
   planDecide().run();
+}
+function planBreak() {
+  const mins = Math.round((Date.now() - S.sitStart) / 60e3);
+  show("play");
+  S.phase = "plbreak";
+  card(`
+    <p class="q">a good place to stop</p>
+    <p class="verdict">You've been going for ${mins} minutes.</p>
+    ${planStrip()}
+    <p class="hint">Your answers get more careless as a sitting runs on: in your history, mistakes roughly double after 45 minutes. A break now lets what you just did settle, and the plan will pick up where it left off.</p>
+    <div class="row">
+      <button class="next" type="button" id="stop-btn" data-focus>Stop for now</button>
+      <button class="ghost" type="button" id="go-btn">Keep going</button>
+    </div>`);
+  $("stop-btn").addEventListener("click", goHome);
+  $("go-btn").addEventListener("click", () => { S.breakAfter = Date.now() + 15 * 60e3; S.phase = null; planNext(); });
 }
 function planStrip() {
   const d = dayLog();
@@ -2517,7 +2598,7 @@ document.addEventListener("keydown", e => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); endStage(); return; }
     if (/^[1-9]$/.test(e.key)) return;
   }
-  if (S.phase === "wtype" || S.phase === "ltype") { if (e.key === "Escape") goHome(); return; }
+  if (S.phase === "wtype" || S.phase === "ltype" || S.phase === "ptype") { if (e.key === "Escape") goHome(); return; }
   if (S.phase === "nstudy" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); continueNewStudy(); return; }
   if (S.phase === "lpick" && /^[1-9]$/.test(e.key)) { e.preventDefault(); toggleLookPart(+e.key - 1); return; }
   if (S.phase === "lpick" && e.key === "Enter") { e.preventDefault(); checkLookPick(); return; }
@@ -2570,7 +2651,7 @@ document.addEventListener("keydown", e => {
   if (S.phase === "breading" && /^[1-4]$/.test(e.key)) { e.preventDefault(); answerBuildReading(+e.key - 1); return; }
   if (S.phase === "meaning" && /^[1-4]$/.test(e.key)) {
     if (+e.key <= S.round.opts.length) { e.preventDefault(); answerMeaning(+e.key - 1); }
-  } else if (["meaning", "parts", "spot", "lfirst", "bdkanji", "bdparts", "mkparts", "mkpick", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lmatch", "lrev", "nstudy", "lpick", "cx", "cxfb", "cxdone"].includes(S.phase)) {
+  } else if (["meaning", "parts", "spot", "lfirst", "bdkanji", "bdparts", "mkparts", "mkpick", "soundpart", "breading", "banchor", "bteach", "wstudy", "wreading", "wmeaning", "lcompare", "lmatch", "ptype", "plbreak", "lrev", "nstudy", "lpick", "cx", "cxfb", "cxdone"].includes(S.phase)) {
     if (e.key === "Escape") goHome();
   }
 });

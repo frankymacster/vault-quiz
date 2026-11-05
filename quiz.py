@@ -83,6 +83,7 @@ def use_vault(path):
 
 
 MATURE = 21          # days; interval at which a card is tagged `known`
+MAX_IVL = 365        # days; no card waits longer than a year
 SESSION_NEW = 20
 SESSION_MAX = 30     # hard cap on total questions -- a backlog day (many
                      # cards maturing to "due" on the same date) shouldn't
@@ -597,6 +598,7 @@ def schedule(card, grade):
                 ivl = round(ivl * 1.3)
             ease += 0.15
         reps += 1
+    ivl = min(ivl, MAX_IVL)
     card.update(ease=round(ease, 2), reps=reps, ivl=ivl, lapses=lapses, due=today() + ivl)
     return card
 
