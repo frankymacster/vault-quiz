@@ -1514,8 +1514,30 @@ function addMixup(k, other) {
   }
   store.set("mixups", S.mixups);
 }
+// where a part sits in a kanji (left, top-right, outer part...), from the dictionary's layout
+const SLOT = D.slot || {};
+function slotOf(x, c) {
+  const s = SLOT[x];
+  if (!s) return null;
+  if (s[c]) return s[c];
+  for (const L of Object.keys(s)) if (K[L] && deepParts(L).has(c)) return s[L];
+  return null;
+}
+// the shared part sits in the same place in both (pairs with no shared part, only stroke differences, count too)
+function samePlace(a, b) {
+  return groupParts([a, b]).shared.every(c => { const p = slotOf(a, c), q = slotOf(b, c); return !p || !q || p === q; });
+}
+// pairs you've confused first, then same-place pairs, then the shared part moved
 function lookLinks(k) {
-  return [...new Set((LOOKS[k] || []).concat(S.mixups[k] || []))].filter(x => K[x] && x !== k);
+  const cf = confusedWith(k);
+  const rank = x => cf[x] ? 0 : samePlace(k, x) ? 1 : 2;
+  return [...new Set((LOOKS[k] || []).concat(S.mixups[k] || []))].filter(x => K[x] && x !== k)
+    .map((x, i) => [rank(x), i, x]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(x => x[2]);
+}
+// who joins a group: confused or same-place partners; the shared part moved only if nothing else is left
+function lookMates(k) {
+  const l = lookLinks(k), cf = confusedWith(k), ok = l.filter(x => cf[x] || samePlace(k, x));
+  return ok.length ? ok : l;
 }
 function lookGroups() {
   const rank = k => ({ hard: 0, learning: 1, new: 2, known: 3 })[kStatus(k)];
@@ -1526,7 +1548,7 @@ function lookGroups() {
   const groups = [], used = new Set();
   for (const [, , , k] of anchors) {
     if (used.has(k)) continue;
-    const members = [k, ...lookLinks(k).filter(x => !used.has(x))].slice(0, 4);
+    const members = [k, ...lookMates(k).filter(x => !used.has(x))].slice(0, 4);
     if (members.length < 2) continue;
     members.forEach(x => used.add(x));
     groups.push(members);
@@ -2221,7 +2243,7 @@ function planDecide() {
     const groups = [], used = new Set();
     for (const k of mix) {
       if (used.has(k) || groups.length === 2) continue;
-      const g = [k, ...lookLinks(k).filter(x => !used.has(x))].slice(0, 4);
+      const g = [k, ...lookMates(k).filter(x => !used.has(x))].slice(0, 4);
       if (g.length > 1) { groups.push(g); g.forEach(x => used.add(x)); }
     }
     S.mode = "lookalikes"; S.planLevels = LV; startLookalikes(groups);

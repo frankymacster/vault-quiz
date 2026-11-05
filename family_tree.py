@@ -169,6 +169,7 @@ if "sound" in data:
 # cut-out of its kanji, placed by the layout the dictionary gives (left half, top, inside a frame...)
 ids_path = os.path.join(os.path.dirname(HERE), ".jkgv_cache", "ids.txt")
 data["frag"] = {}
+data["slot"] = {}
 if os.path.exists(ids_path):
     ids = bk.load_ids(ids_path)
     OPS3 = set("⿲⿳")
@@ -236,6 +237,8 @@ if os.path.exists(ids_path):
         node, _ = parse(re.sub(r"&[^;]+;", "", seq))
         leaves = []
         walk(node, (0, 0, 1, 1), [(0, 0), (1, 0), (1, 1), (0, 1)], False, leaves)
+        data["slot"][k] = {ch: where(bb, frame) for ch, poly, bb, frame in leaves
+                           if ch not in bk.UNREPRESENTABLE and ch != k}
         found = [(poly, bb, frame) for ch, poly, bb, frame in leaves if ch in bk.UNREPRESENTABLE]
         for n, (poly, bb, frame) in enumerate(found):
             pid = "◌" + k + (str(n + 1) if len(found) > 1 else "")
